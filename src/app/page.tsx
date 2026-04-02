@@ -14,6 +14,7 @@ import { MissingAsnPopup }       from '@/components/MissingAsnPopup'
 import { SkuVariancePopup }      from '@/components/SkuVariancePopup'
 import type { MissingAsnRow }    from '@/components/MissingAsnPopup'
 import type { VarianceSummaryRow } from '@/components/SkuVariancePopup'
+import { ProfileEditPopup } from '@/components/ProfileEditPopup'
 // ─── Helper (copy từ LayoutTab) ─────────────────────────────────────
 function worstAging(rows: any[]): string | null {
   const order = ['red', 'orange', 'yellow', 'green']
@@ -31,7 +32,6 @@ const WarehouseFloorPlan = dynamic(() => import('@/components/WarehouseFloorPlan
     </div>
   ),
 })
-
 export type Tab = 'dashboard' | 'create' | 'scan' | 'mover' | 'history' | 'admin'
 const F = {
   display: "var(--font-display, 'Plus Jakarta Sans', sans-serif)",
@@ -176,6 +176,7 @@ export default function HomePage() {
   const router = useRouter()
   const today  = new Date()
   const [stagingCriticalCount, setStagingCriticalCount] = useState(0)
+  const [showProfileEdit, setShowProfileEdit] = useState(false)
 
   const [profile,          setProfile]          = useState<Profile | null>(null)
   const [tab,              setTab]              = useState<Tab>('dashboard')
@@ -333,11 +334,21 @@ const fetchWarehouseStats = useCallback(async () => {
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 14 }}>
           <span style={{ fontFamily: F.code, fontSize: 12, color: 'rgba(255,255,255,0.35)' }}>{clock}</span>
-          <div style={{ background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6, padding: '5px 10px', fontSize: 12, color: 'rgba(255,255,255,0.55)', display: 'flex', alignItems: 'center', gap: 6 }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#c8ff47' }} />
-            {profile?.full_name || profile?.email?.split('@')[0]}
-            <span style={{ background: 'rgba(200,255,71,0.12)', color: '#c8ff47', fontSize: 10, padding: '1px 6px', borderRadius: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{profile?.role}</span>
-          </div>
+          <button
+  onClick={() => setShowProfileEdit(true)}
+  style={{
+    background: 'rgba(255,255,255,0.07)', border: '1px solid rgba(255,255,255,0.1)',
+    borderRadius: 6, padding: '5px 10px', fontSize: 12, color: 'rgba(255,255,255,0.55)',
+    display: 'flex', alignItems: 'center', gap: 6,
+    cursor: 'pointer', transition: 'background 0.15s',
+  }}
+  onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.12)')}
+  onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.07)')}
+>
+  <div style={{ width: 6, height: 6, borderRadius: '50%', background: '#c8ff47' }} />
+  {profile?.full_name || profile?.email?.split('@')[0]}
+  <span style={{ background: 'rgba(200,255,71,0.12)', color: '#c8ff47', fontSize: 10, padding: '1px 6px', borderRadius: 10, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{profile?.role}</span>
+</button>
           <button onClick={handleSignOut} style={{ background: 'none', border: '1px solid rgba(255,255,255,0.15)', borderRadius: 6, color: 'rgba(255,255,255,0.4)', fontSize: 12, padding: '5px 10px', cursor: 'pointer' }}>Đăng xuất</button>
         </div>
       </nav>
@@ -366,6 +377,13 @@ const fetchWarehouseStats = useCallback(async () => {
 
       {showMissingAsn && <MissingAsnPopup rows={missingAsn}     onClose={() => setShowMissingAsn(false)} />}
       {showVariance   && <SkuVariancePopup rows={varianceSummary} onClose={() => setShowVariance(false)} />}
+        {showProfileEdit && (
+  <ProfileEditPopup
+    profile={profile!}
+    onClose={() => setShowProfileEdit(false)}
+    onUpdated={(updated) => { setProfile(updated); setShowProfileEdit(false) }}
+  />
+)}
     </div>
   )
 }
