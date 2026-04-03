@@ -35,7 +35,7 @@ const DEFAULT_LABEL_SETTINGS: LabelSettings = {
   heightMm: 70,
   colsPerRow: 2,
   showQr: true,
-  showBarcode: true,
+  showBarcode: false,
   showDate: true,
   showNote: false,
 }
@@ -276,12 +276,52 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
   const [toast, setToast] = useState('')
   const [showLabelSettings, setShowLabelSettings] = useState(false)
   const [labelSettings, setLabelSettings] = useState<LabelSettings>(DEFAULT_LABEL_SETTINGS)
+  const labelSettingsRef = useRef<LabelSettings>(DEFAULT_LABEL_SETTINGS)
+  const [allPallets, setAllPallets] = useState<Pallet[]>([])
+  const [search, setSearch] = useState('')
+  const [reprintingId, setReprintingId] = useState<string | null>(null)
 
   // Lưu QR dataURL và barcode SVG string riêng — không dùng DOM clone
   const qrDataUrls = useRef<Record<string, string>>({})
   const barcodeSvgs = useRef<Record<string, string>>({})
 
   const activePrefix = customPrefix.toUpperCase() || prefix
+
+  async function fetchAllPallets() {
+    const { data } = await supabase
+      .from('pallets')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(200)
+    if (data) setAllPallets(data as Pallet[])
+  }
+
+  // In lại pallet bất kỳ — generate QR/barcode on-the-fly
+  async function reprintSingle(p: Pallet) {
+    setReprintingId(p.id)
+    try {
+      const QRCode = (await import('qrcode')).default
+      const JsBarcode = (await import('jsbarcode')).default
+
+      // QR → dataURL
+      const qrUrl = await QRCode.toDataURL(p.code, { width: 200, margin: 1 })
+
+      // Barcode → SVG string qua canvas tạm
+      const svgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
+      JsBarcode(svgEl, p.code, { format: 'CODE128', width: 1.5, height: 48, displayValue: false, margin: 4 })
+      const bcSvg = svgEl.outerHTML
+
+      // Lưu vào refs để buildPrintHtml dùng
+      qrDataUrls.current[p.id] = qrUrl
+      barcodeSvgs.current[p.id] = bcSvg
+
+      printWithSettings([p], labelSettingsRef.current)
+    } catch (e) {
+      showToast('Lỗi khi in: ' + String(e))
+    } finally {
+      setReprintingId(null)
+    }
+  }
 
   function buildPrintHtml(pallets: Pallet[], s: LabelSettings): string {
     const isA4 = s.preset === 'a4'
@@ -368,12 +408,13 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
 
   function handleApplyAndPrint(s: LabelSettings) {
     setLabelSettings(s)
+    labelSettingsRef.current = s
     setShowLabelSettings(false)
     printWithSettings(created, s)
   }
 
   function handleQuickPrint() {
-    printWithSettings(created, labelSettings)
+    printWithSettings(created, labelSettingsRef.current)
   }
 
   useEffect(() => {
@@ -391,6 +432,8 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
     }
     if (activePrefix && refDate) calc()
   }, [activePrefix, refDate])
+
+  useEffect(() => { fetchAllPallets() }, [])
 
   function showToast(msg: string) {
     setToast(msg)
@@ -431,6 +474,7 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
     setCreated(newPallets)
     setLoading(false)
     onCreated()
+    fetchAllPallets()
     showToast(`Đã tạo ${newPallets.length} pallet`)
     setTimeout(() => renderCodes(newPallets), 300)
   }
@@ -597,33 +641,98 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
             </div>
           </div>
 
-          {created.length > 0 && (
-            <div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16, overflow: 'hidden' }}>
-              <div style={{ padding: '12px 20px', borderBottom: '1px solid rgba(0,0,0,0.07)' }}>
-                <span style={{ fontFamily: 'var(--font-display, sans-serif)', fontSize: 13, fontWeight: 700 }}>Vừa tạo ({created.length})</span>
+          {/* Bảng tất cả pallets */}
+          <div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16, overflow: 'hidden' }}>
+            <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(0,0,0,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
+              <span style={{ fontFamily: 'var(--font-display, sans-serif)', fontSize: 13, fontWeight: 700, whiteSpace: 'nowrap' }}>
+                Tất cả Pallet
+                <span style={{ marginLeft: 8, fontSize: 11, color: '#a09e96', fontWeight: 400 }}>({allPallets.length})</span>
+              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, maxWidth: 300 }}>
+                <input
+                  value={search}
+                  onChange={e => setSearch(e.target.value)}
+                  placeholder="Tìm theo mã, ghi chú..."
+                  style={{
+                    flex: 1, background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)',
+                    borderRadius: 8, color: '#1a1916', fontSize: 12, padding: '7px 12px', outline: 'none',
+                  }}
+                />
+                <button onClick={fetchAllPallets} title="Làm mới" style={{
+                  background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8,
+                  width: 32, height: 32, cursor: 'pointer', color: '#6b6a64', fontSize: 14,
+                  display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                }}>↻</button>
               </div>
+            </div>
+            <div style={{ maxHeight: 420, overflowY: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-                <thead>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
                   <tr style={{ background: '#f5f4f0' }}>
-                    {['Mã', 'Status', 'Tạo lúc'].map(h => (
-                      <th key={h} style={{ textAlign: 'left', fontSize: 11, fontWeight: 600, color: '#a09e96', padding: '9px 16px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{h}</th>
+                    {['Mã', 'Status', 'Ghi chú', 'Tạo lúc', ''].map(h => (
+                      <th key={h} style={{ textAlign: 'left', fontSize: 11, fontWeight: 600, color: '#a09e96', padding: '9px 16px', textTransform: 'uppercase', letterSpacing: '0.05em', whiteSpace: 'nowrap' }}>{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {created.map(p => (
-                    <tr key={p.id} style={{ borderBottom: '1px solid rgba(0,0,0,0.05)' }}>
-                      <td style={{ padding: '10px 16px', fontFamily: 'monospace', fontSize: 12, fontWeight: 500 }}>{p.code}</td>
-                      <td style={{ padding: '10px 16px' }}><StatusBadge status={p.status} /></td>
-                      <td style={{ padding: '10px 16px', fontFamily: 'monospace', fontSize: 11, color: '#a09e96' }}>
-                        {new Date(p.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  {allPallets
+                    .filter(p => {
+                      if (!search.trim()) return true
+                      const q = search.toLowerCase()
+                      return p.code.toLowerCase().includes(q) || (p.note ?? '').toLowerCase().includes(q)
+                    })
+                    .map(p => {
+                      const isNew = created.some(c => c.id === p.id)
+                      return (
+                        <tr key={p.id} style={{
+                          borderBottom: '1px solid rgba(0,0,0,0.05)',
+                          background: isNew ? 'rgba(0,200,100,0.04)' : 'transparent',
+                        }}>
+                          <td style={{ padding: '10px 16px', fontFamily: 'monospace', fontSize: 12, fontWeight: 500, whiteSpace: 'nowrap' }}>
+                            {isNew && <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: '#16a34a', marginRight: 6, verticalAlign: 'middle' }} />}
+                            {p.code}
+                          </td>
+                          <td style={{ padding: '10px 16px' }}><StatusBadge status={p.status} /></td>
+                          <td style={{ padding: '10px 16px', fontSize: 12, color: '#6b6a64', maxWidth: 140, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {p.note ?? <span style={{ color: '#ccc' }}>—</span>}
+                          </td>
+                          <td style={{ padding: '10px 16px', fontFamily: 'monospace', fontSize: 11, color: '#a09e96', whiteSpace: 'nowrap' }}>
+                            {new Date(p.created_at).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                          </td>
+                          <td style={{ padding: '10px 16px', textAlign: 'right' }}>
+                            <button
+                              onClick={() => reprintSingle(p)}
+                              disabled={reprintingId === p.id}
+                              title="In lại nhãn"
+                              style={{
+                                background: 'transparent',
+                                color: reprintingId === p.id ? '#ccc' : '#0d4a8f',
+                                border: `1px solid ${reprintingId === p.id ? '#eee' : 'rgba(13,74,143,0.25)'}`,
+                                borderRadius: 6, fontSize: 11, padding: '5px 10px',
+                                cursor: reprintingId === p.id ? 'not-allowed' : 'pointer',
+                                whiteSpace: 'nowrap',
+                              }}>
+                              {reprintingId === p.id ? '...' : '⎙ In'}
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  {allPallets.filter(p => {
+                    if (!search.trim()) return true
+                    const q = search.toLowerCase()
+                    return p.code.toLowerCase().includes(q) || (p.note ?? '').toLowerCase().includes(q)
+                  }).length === 0 && (
+                    <tr>
+                      <td colSpan={5} style={{ padding: '24px 16px', textAlign: 'center', fontSize: 13, color: '#a09e96' }}>
+                        Không tìm thấy pallet nào
                       </td>
                     </tr>
-                  ))}
+                  )}
                 </tbody>
               </table>
             </div>
-          )}
+          </div>
         </div>
       </div>
 

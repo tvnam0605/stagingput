@@ -4,13 +4,15 @@ import { F, C } from '@/ui'
 
 import { LocationsTab } from './admin/location/LocationsTab'
 import { AccountsTab } from './admin/accounts/AccountTab'
+import { PalletsTab } from './admin/pallets/PalletsTab'
 // =======================================================
 
-type AdminTab = 'accounts' | 'locations'
+type AdminTab = 'accounts' | 'locations' | 'pallets'
 
 const TABS: { key: AdminTab; label: string }[] = [
   { key: 'accounts',  label: 'Tài khoản' },
   { key: 'locations', label: 'Locations' },
+  { key: 'pallets',   label: 'Quản lý Pallet' },
 ]
 
 export function AdminPanel() {
@@ -44,6 +46,7 @@ export function AdminPanel() {
 
       {tab === 'accounts'  && <AccountsTab />}
       {tab === 'locations' && <LocationsTab />}
+      {tab === 'pallets'   && <PalletsTab />}
     </div>
   )
 }
