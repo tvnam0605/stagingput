@@ -25,11 +25,23 @@ type PalletWithRelations = Pallet & {
   boxes: BoxWithScanner[]
 }
 
+type HistoryBoxDetail = {
+  box_id: string
+  box_code: string
+  asn_id: string | null
+  order_no: string | null
+  asn_status_label: string | null
+  skus: { sku_id: string; sku_name: string; received_quantity: number }[]
+}
+
 export function HistoryPanel() {
   const [pallets, setPallets] = useState<PalletWithRelations[]>([])
   const [search, setSearch] = useState('')
   const [filter, setFilter] = useState('all')
   const [selected, setSelected] = useState<PalletWithRelations | null>(null)
+  const [boxDetails, setBoxDetails] = useState<Record<string, HistoryBoxDetail>>({})
+  const [expandedBox, setExpandedBox] = useState<string | null>(null)
+  const [loadingBox, setLoadingBox] = useState<string | null>(null)
 
   const fetchHistory = useCallback(async () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -75,6 +87,21 @@ export function HistoryPanel() {
   function displayName(profile: Profile | null) {
     if (!profile) return '—'
     return profile.full_name || profile.email
+  }
+
+  async function toggleBoxExpand(b: BoxWithScanner) {
+    if (expandedBox === b.id) { setExpandedBox(null); return }
+    if (!boxDetails[b.id]) {
+      setLoadingBox(b.id)
+      const { data } = await supabase
+        .from('history_box_detail')
+        .select('*')
+        .eq('box_id', b.id)
+        .single()
+      if (data) setBoxDetails(prev => ({ ...prev, [b.id]: data as HistoryBoxDetail }))
+      setLoadingBox(null)
+    }
+    setExpandedBox(b.id)
   }
 
   return (
@@ -142,7 +169,7 @@ export function HistoryPanel() {
 
       {/* Detail modal */}
       {selected && (
-        <div onClick={e => e.target === e.currentTarget && setSelected(null)}
+        <div onClick={e => { if (e.target === e.currentTarget) { setSelected(null); setExpandedBox(null); setBoxDetails({}) } }}
           style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)', zIndex: 500, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
           <div style={{ background: '#fff', borderRadius: 16, width: 520, maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 8px 40px rgba(0,0,0,0.2)' }}>
             <div style={{ padding: '18px 24px', borderBottom: '1px solid rgba(0,0,0,0.08)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', position: 'sticky', top: 0, background: '#fff' }}>
@@ -150,7 +177,7 @@ export function HistoryPanel() {
                 <div style={{ fontFamily: F.display, fontSize: 15, fontWeight: 700 }}>Chi tiết Pallet</div>
                 <div style={{ fontFamily: F.code, fontSize: 12, color: '#a09e96', marginTop: 2 }}>{selected.code}</div>
               </div>
-              <button onClick={() => setSelected(null)}
+              <button onClick={() => { setSelected(null); setExpandedBox(null); setBoxDetails({}) }}
                 style={{ background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 6, padding: '6px 12px', cursor: 'pointer', fontSize: 13 }}>
                 ✕ Đóng
               </button>
@@ -217,7 +244,7 @@ export function HistoryPanel() {
 
               {selected.note && (
                 <div style={{ background: '#fef3d7', border: '1px solid rgba(122,74,0,0.2)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#7a4a00', marginBottom: 16 }}>
-                  📝 {selected.note}
+                  Note: {selected.note}
                 </div>
               )}
 
@@ -226,20 +253,80 @@ export function HistoryPanel() {
               </div>
               {!(selected.boxes ?? []).length ? (
                 <div style={{ textAlign: 'center', padding: 20, color: '#a09e96', fontSize: 13 }}>Chưa có box</div>
-              ) : (selected.boxes ?? []).map((b: BoxWithScanner, i: number) => (
-                <div key={b.id} style={{ display: 'flex', alignItems: 'center', gap: 10, background: '#f5f4f0', borderRadius: 8, padding: '8px 12px', marginBottom: 6 }}>
-                  <span style={{ fontSize: 11, color: '#a09e96', fontFamily: F.code, minWidth: 24 }}>{i + 1}</span>
-                  <span style={{ fontFamily: F.code, fontSize: 13, fontWeight: 500, flex: 1 }}>{b.box_code}</span>
-                  {/* Tên người scan */}
-                  <span style={{ fontSize: 11, color: '#1a1916', background: '#e8e7e1', borderRadius: 4, padding: '2px 7px', whiteSpace: 'nowrap' }}>
-                    {displayName(b.scanner)}
-                  </span>
-                  {/* Thời gian scan */}
-                  <span style={{ fontSize: 11, color: '#a09e96', fontFamily: F.code, whiteSpace: 'nowrap' }}>
-                    {fmt(b.scanned_at)}
-                  </span>
-                </div>
-              ))}
+              ) : (selected.boxes ?? []).map((b: BoxWithScanner, i: number) => {
+                const isExpanded = expandedBox === b.id
+                const detail = boxDetails[b.id]
+                const isLoading = loadingBox === b.id
+                return (
+                  <div key={b.id} style={{ border: '1px solid rgba(0,0,0,0.07)', borderRadius: 8, marginBottom: 6, overflow: 'hidden' }}>
+                    {/* Row chính */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, background: isExpanded ? '#f0efe9' : '#f5f4f0', padding: '8px 12px' }}>
+                      <span style={{ fontSize: 11, color: '#a09e96', fontFamily: F.code, minWidth: 24 }}>{i + 1}</span>
+                      <span style={{ fontFamily: F.code, fontSize: 13, fontWeight: 500, flex: 1 }}>{b.box_code}</span>
+                      <span style={{ fontSize: 11, color: '#1a1916', background: '#e8e7e1', borderRadius: 4, padding: '2px 7px', whiteSpace: 'nowrap' }}>
+                        {displayName(b.scanner)}
+                      </span>
+                      <span style={{ fontSize: 11, color: '#a09e96', fontFamily: F.code, whiteSpace: 'nowrap' }}>
+                        {fmt(b.scanned_at)}
+                      </span>
+                      <button
+                        onClick={() => toggleBoxExpand(b)}
+                        style={{
+                          background: isExpanded ? '#1a1916' : 'transparent',
+                          color: isExpanded ? '#fff' : '#6b6a64',
+                          border: '1px solid rgba(0,0,0,0.12)',
+                          borderRadius: 5, fontSize: 11, padding: '3px 8px',
+                          cursor: 'pointer', whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {isLoading ? '...' : isExpanded ? '▲' : '▼ SKU'}
+                      </button>
+                    </div>
+
+                    {/* Expanded detail */}
+                    {isExpanded && (
+                      <div style={{ background: '#fff', borderTop: '1px solid rgba(0,0,0,0.06)', padding: '10px 12px' }}>
+                        {isLoading || !detail ? (
+                          <div style={{ fontSize: 12, color: '#a09e96', textAlign: 'center', padding: '6px 0' }}>Đang tải...</div>
+                        ) : (
+                          <div>
+                            {/* ASN info */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                              <span style={{ fontSize: 10, color: '#a09e96', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>ASN</span>
+                              <span style={{ fontFamily: F.code, fontSize: 12, fontWeight: 700, color: '#1a1916' }}>{detail.asn_id ?? '—'}</span>
+                              {detail.asn_status_label && (
+                                <span style={{ fontSize: 10, color: '#6b6a64', background: '#f0efe9', borderRadius: 4, padding: '1px 6px' }}>
+                                  {detail.asn_status_label}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* SKU list */}
+                            {!detail.skus?.length ? (
+                              <div style={{ fontSize: 12, color: '#a09e96' }}>Chưa có SKU</div>
+                            ) : (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                                {detail.skus.map(s => (
+                                  <div key={s.sku_id} style={{
+                                    display: 'flex', alignItems: 'center', gap: 8,
+                                    background: '#f5f4f0', borderRadius: 6, padding: '5px 10px',
+                                  }}>
+                                    <span style={{ fontFamily: F.code, fontSize: 11, color: '#6b6a64', minWidth: 72 }}>{s.sku_id}</span>
+                                    <span style={{ fontSize: 12, color: '#1a1916', flex: 1 }}>{s.sku_name}</span>
+                                    <span style={{ fontFamily: F.code, fontSize: 11, color: '#a09e96', whiteSpace: 'nowrap' }}>
+                                      Qty: <strong style={{ color: '#1a1916' }}>{s.received_quantity}</strong>
+                                    </span>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         </div>
