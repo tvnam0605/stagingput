@@ -11,6 +11,7 @@ const F = {
 }
 
 type Profile = { full_name: string | null; email: string }
+type StagingLocation = { code: string; description: string | null }
 
 type BoxWithScanner = Box & {
   scanner: Profile | null
@@ -18,6 +19,9 @@ type BoxWithScanner = Box & {
 
 type PalletWithRelations = Pallet & {
   creator: Profile | null
+  mover: Profile | null
+  done_by_profile: Profile | null
+  staging_location: StagingLocation | null
   boxes: BoxWithScanner[]
 }
 
@@ -34,6 +38,9 @@ export function HistoryPanel() {
       .select(`
         *,
         creator:profiles!created_by(full_name, email),
+        mover:profiles!moved_by(full_name, email),
+        done_by_profile:profiles!done_by(full_name, email),
+        staging_location:locations_staging!staging_location_id(code, description),
         boxes(
           *,
           scanner:profiles!scanned_by(full_name, email)
@@ -149,28 +156,64 @@ export function HistoryPanel() {
               </button>
             </div>
             <div style={{ padding: '20px 24px' }}>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 16 }}>
-                {[
-                  { k: 'Trạng thái', v: <StatusBadge status={selected.status} /> },
-                  { k: 'Số Box', v: <span style={{ fontFamily: F.code, fontSize: 20, fontWeight: 700 }}>{(selected.boxes ?? []).length}</span> },
-                  {
-                    k: 'Tạo bởi',
-                    v: <span style={{ fontSize: 13, fontWeight: 500 }}>{displayName(selected.creator)}</span>
-                  },
-                  { k: 'Tạo lúc', v: fmt(selected.created_at) },
-                  {
-                    k: 'Chốt Receive lúc',
-                    v: selected.done_at
-                      ? <span style={{ fontWeight: 600, color: '#166534' }}>{fmt(selected.done_at)}</span>
-                      : <span style={{ color: '#a09e96' }}>Chưa chốt</span>
-                  },
-                ].map(item => (
-                  <div key={item.k} style={{ background: '#f5f4f0', borderRadius: 8, padding: '12px 14px' }}>
-                    <div style={{ fontSize: 11, color: '#a09e96', marginBottom: 6 }}>{item.k}</div>
-                    <div style={{ fontSize: 13 }}>{item.v}</div>
-                  </div>
-                ))}
+              {/* Row 1: Trạng thái + Số box */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 10 }}>
+                <div style={{ background: '#f5f4f0', borderRadius: 8, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 11, color: '#a09e96', marginBottom: 6 }}>Trạng thái</div>
+                  <StatusBadge status={selected.status} />
+                </div>
+                <div style={{ background: '#f5f4f0', borderRadius: 8, padding: '12px 14px' }}>
+                  <div style={{ fontSize: 11, color: '#a09e96', marginBottom: 6 }}>Số Box</div>
+                  <span style={{ fontFamily: F.code, fontSize: 20, fontWeight: 700 }}>{(selected.boxes ?? []).length}</span>
+                </div>
               </div>
+
+              {/* Row 2: Tạo / Chốt Receive / Move — mỗi cái 1 block full width */}
+              {[
+                {
+                  label: 'Tạo pallet',
+                  who: displayName(selected.creator),
+                  when: fmt(selected.created_at),
+                  color: '#1a1916',
+                },
+                {
+                  label: 'Chốt Receive',
+                  who: selected.done_at ? displayName(selected.done_by_profile) : null,
+                  when: selected.done_at ? fmt(selected.done_at) : null,
+                  color: '#166534',
+                },
+                {
+                  label: 'Move to Staging',
+                  who: displayName(selected.mover),
+                  when: selected.moved_at ? fmt(selected.moved_at) : null,
+                  color: '#1e40af',
+                },
+              ].map(item => (
+                <div key={item.label} style={{ background: '#f5f4f0', borderRadius: 8, padding: '12px 14px', marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: '#a09e96', marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>{item.label}</div>
+                  {item.who && item.when ? (
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <span style={{ fontSize: 13, fontWeight: 600, color: item.color }}>{item.who}</span>
+                      <span style={{ fontFamily: F.code, fontSize: 11, color: '#6b6a64' }}>{item.when}</span>
+                    </div>
+                  ) : (
+                    <span style={{ fontSize: 13, color: '#a09e96' }}>—</span>
+                  )}
+                </div>
+              ))}
+
+              {/* Staging */}
+              {selected.staging_location && (
+                <div style={{ background: '#eff6ff', border: '1px solid rgba(30,64,175,0.15)', borderRadius: 8, padding: '12px 14px', marginBottom: 10 }}>
+                  <div style={{ fontSize: 11, color: '#a09e96', marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Staging</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontFamily: F.code, fontWeight: 700, fontSize: 14, color: '#1e40af' }}>{selected.staging_location.code}</span>
+                    {selected.staging_location.description && (
+                      <span style={{ fontSize: 12, color: '#6b6a64' }}>{selected.staging_location.description}</span>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {selected.note && (
                 <div style={{ background: '#fef3d7', border: '1px solid rgba(122,74,0,0.2)', borderRadius: 8, padding: '10px 14px', fontSize: 13, color: '#7a4a00', marginBottom: 16 }}>
