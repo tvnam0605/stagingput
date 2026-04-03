@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Profile, Pallet } from '@/lib/types'
 import { StatusBadge } from '@/app/page'
@@ -11,6 +11,259 @@ const PREFIXES = [
   { code: 'BN', name: 'Bin' },
 ]
 
+const LABEL_PRESETS = [
+  { id: '60x40', label: '60 × 40 mm', w: 60, h: 40 },
+  { id: '100x70', label: '100 × 70 mm', w: 100, h: 70 },
+  { id: '148x105', label: 'A6 (148 × 105)', w: 148, h: 105 },
+  { id: 'a4', label: 'A4 — nhiều nhãn', w: 0, h: 0 },
+]
+
+interface LabelSettings {
+  preset: string
+  widthMm: number
+  heightMm: number
+  colsPerRow: number
+  showQr: boolean
+  showBarcode: boolean
+  showDate: boolean
+  showNote: boolean
+}
+
+const DEFAULT_LABEL_SETTINGS: LabelSettings = {
+  preset: '100x70',
+  widthMm: 100,
+  heightMm: 70,
+  colsPerRow: 2,
+  showQr: true,
+  showBarcode: true,
+  showDate: true,
+  showNote: false,
+}
+
+function LabelSettingsModal({
+  settings,
+  onClose,
+  onApply,
+}: {
+  settings: LabelSettings
+  onClose: () => void
+  onApply: (s: LabelSettings) => void
+}) {
+  const [local, setLocal] = useState<LabelSettings>(settings)
+
+  function set<K extends keyof LabelSettings>(k: K, v: LabelSettings[K]) {
+    setLocal(prev => ({ ...prev, [k]: v }))
+  }
+
+  function selectPreset(id: string) {
+    const p = LABEL_PRESETS.find(x => x.id === id)
+    if (!p) return
+    if (id === 'a4') {
+      set('preset', 'a4')
+    } else {
+      setLocal(prev => ({ ...prev, preset: id, widthMm: p.w, heightMm: p.h }))
+    }
+  }
+
+  return (
+    /* Backdrop */
+    <div
+      onClick={e => { if (e.target === e.currentTarget) onClose() }}
+      style={{
+        position: 'fixed', inset: 0, zIndex: 1000,
+        background: 'rgba(0,0,0,0.45)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }}
+    >
+      <div style={{
+        background: '#fff', borderRadius: 18, width: 360,
+        boxShadow: '0 16px 60px rgba(0,0,0,0.25)',
+        overflow: 'hidden', fontFamily: 'inherit',
+      }}>
+        {/* Header */}
+        <div style={{
+          padding: '16px 20px', borderBottom: '1px solid rgba(0,0,0,0.07)',
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        }}>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 700, color: '#1a1916' }}>Cài đặt nhãn in</div>
+            <div style={{ fontSize: 12, color: '#a09e96', marginTop: 2 }}>Tuỳ chỉnh kích thước &amp; nội dung</div>
+          </div>
+          <button onClick={onClose} style={{
+            background: '#f0efe9', border: 'none', borderRadius: 8,
+            width: 30, height: 30, cursor: 'pointer', fontSize: 16, color: '#6b6a64',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>×</button>
+        </div>
+
+        <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 18 }}>
+
+          {/* Preset size picker */}
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a09e96', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+              Kích thước
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {LABEL_PRESETS.map(p => (
+                <button key={p.id} onClick={() => selectPreset(p.id)} style={{
+                  background: local.preset === p.id ? '#1a1916' : '#f0efe9',
+                  color: local.preset === p.id ? '#fff' : '#6b6a64',
+                  border: `1px solid ${local.preset === p.id ? '#1a1916' : 'rgba(0,0,0,0.1)'}`,
+                  borderRadius: 8, padding: '9px 10px', fontSize: 12, fontWeight: 500,
+                  cursor: 'pointer', textAlign: 'center', transition: 'all 0.15s',
+                }}>
+                  {p.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Custom dimensions — chỉ hiện khi không phải A4 */}
+          {local.preset !== 'a4' && (
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a09e96', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>Rộng (mm)</label>
+                <input
+                  type="number" value={local.widthMm} min={30} max={300}
+                  onChange={e => set('widthMm', Math.max(30, Math.min(300, +e.target.value)))}
+                  style={{
+                    width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)',
+                    borderRadius: 8, color: '#1a1916', fontFamily: 'monospace', fontSize: 14,
+                    padding: '9px 12px', outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a09e96', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 6 }}>Cao (mm)</label>
+                <input
+                  type="number" value={local.heightMm} min={20} max={300}
+                  onChange={e => set('heightMm', Math.max(20, Math.min(300, +e.target.value)))}
+                  style={{
+                    width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)',
+                    borderRadius: 8, color: '#1a1916', fontFamily: 'monospace', fontSize: 14,
+                    padding: '9px 12px', outline: 'none', boxSizing: 'border-box',
+                  }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Số cột mỗi hàng — chỉ hiện khi A4 */}
+          {local.preset === 'a4' && (
+            <div>
+              <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a09e96', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 8 }}>
+                Số nhãn mỗi hàng &nbsp;<span style={{ fontFamily: 'monospace', color: '#1a1916', fontSize: 13 }}>{local.colsPerRow}</span>
+              </label>
+              <input type="range" min={1} max={4} value={local.colsPerRow}
+                onChange={e => set('colsPerRow', +e.target.value)}
+                style={{ width: '100%' }}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 11, color: '#a09e96', marginTop: 2 }}>
+                {[1, 2, 3, 4].map(n => <span key={n}>{n}</span>)}
+              </div>
+            </div>
+          )}
+
+          {/* Divider */}
+          <div style={{ borderTop: '1px solid rgba(0,0,0,0.07)' }} />
+
+          {/* Nội dung hiển thị */}
+          <div>
+            <label style={{ display: 'block', fontSize: 11, fontWeight: 600, color: '#a09e96', letterSpacing: '0.08em', textTransform: 'uppercase', marginBottom: 10 }}>
+              Nội dung hiển thị
+            </label>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+              {([
+                ['showQr', 'QR code'],
+                ['showBarcode', 'Barcode'],
+                ['showDate', 'Ngày tạo'],
+                ['showNote', 'Ghi chú'],
+              ] as [keyof LabelSettings, string][]).map(([key, label]) => (
+                <label key={key} style={{
+                  display: 'flex', alignItems: 'center', gap: 8,
+                  background: local[key] ? '#f0efe9' : 'transparent',
+                  border: `1px solid ${local[key] ? 'rgba(0,0,0,0.15)' : 'rgba(0,0,0,0.08)'}`,
+                  borderRadius: 8, padding: '8px 12px', cursor: 'pointer',
+                  transition: 'all 0.12s',
+                }}>
+                  <input type="checkbox"
+                    checked={local[key] as boolean}
+                    onChange={e => set(key, e.target.checked as LabelSettings[typeof key])}
+                    style={{ width: 14, height: 14, accentColor: '#1a1916', cursor: 'pointer' }}
+                  />
+                  <span style={{ fontSize: 13, color: '#1a1916', fontWeight: 500 }}>{label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Preview mini */}
+          <div style={{
+            background: '#f0efe9', borderRadius: 10, padding: 14,
+            display: 'flex', justifyContent: 'center', alignItems: 'center',
+            border: '1px dashed rgba(0,0,0,0.15)',
+          }}>
+            <div style={{
+              background: '#fff', border: '1px solid #ddd', borderRadius: 6,
+              padding: '10px 14px', display: 'flex', flexDirection: 'column',
+              alignItems: 'center', gap: 4, minWidth: 90,
+              aspectRatio: local.preset !== 'a4' ? `${local.widthMm}/${local.heightMm}` : 'auto',
+              maxHeight: 130, justifyContent: 'center',
+            }}>
+              <div style={{ fontSize: 7, color: '#bbb', textTransform: 'uppercase', letterSpacing: '0.1em' }}>WMS STATION</div>
+              {local.showQr && (
+                <div style={{ width: 36, height: 36, background: '#1a1916', borderRadius: 3, display: 'grid', gridTemplateColumns: 'repeat(6,6px)', gap: 0 }}>
+                  {Array.from({ length: 36 }, (_, i) =>
+                    <div key={i} style={{ width: 6, height: 6, background: [0,1,2,6,12,7,13,14,30,31,35,34,29,28,23,24,18,17].includes(i) ? '#fff' : 'transparent' }} />
+                  )}
+                </div>
+              )}
+              {local.showBarcode && (
+                <div style={{ display: 'flex', gap: 1, height: 18 }}>
+                  {[2,1,3,1,2,1,1,2,3,1,2,1,1,3,1].map((w, i) => (
+                    <div key={i} style={{ width: w, background: i % 2 === 0 ? '#1a1916' : 'transparent', height: '100%' }} />
+                  ))}
+                </div>
+              )}
+              <div style={{ fontFamily: 'monospace', fontSize: 8, fontWeight: 600, color: '#1a1916' }}>PL-250403-0001</div>
+              {local.showDate && <div style={{ fontSize: 7, color: '#bbb' }}>03/04/2025</div>}
+              {local.showNote && <div style={{ fontSize: 7, color: '#999' }}>Supplier A</div>}
+            </div>
+            {local.preset === 'a4' && local.colsPerRow > 1 && (
+              <div style={{ width: 3, height: 60, borderLeft: '1px dashed #ccc', margin: '0 6px' }} />
+            )}
+            {local.preset === 'a4' && local.colsPerRow > 1 && (
+              <div style={{
+                background: '#fff', border: '1px solid #ddd', borderRadius: 6,
+                padding: '10px 14px', display: 'flex', flexDirection: 'column',
+                alignItems: 'center', gap: 4, minWidth: 90, maxHeight: 130, justifyContent: 'center', opacity: 0.5,
+              }}>
+                <div style={{ fontSize: 7, color: '#bbb', textTransform: 'uppercase', letterSpacing: '0.1em' }}>WMS STATION</div>
+                <div style={{ width: 36, height: 36, background: '#eee', borderRadius: 3 }} />
+                <div style={{ fontFamily: 'monospace', fontSize: 8, fontWeight: 600, color: '#ccc' }}>PL-250403-0002</div>
+              </div>
+            )}
+          </div>
+
+          {/* Buttons */}
+          <div style={{ display: 'flex', gap: 10 }}>
+            <button onClick={onClose} style={{
+              flex: 1, background: '#f0efe9', color: '#6b6a64',
+              border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8,
+              fontSize: 13, fontWeight: 600, padding: 11, cursor: 'pointer',
+            }}>Huỷ</button>
+            <button onClick={() => onApply(local)} style={{
+              flex: 2, background: '#1a1916', color: '#fff',
+              border: 'none', borderRadius: 8,
+              fontSize: 13, fontWeight: 700, padding: 11, cursor: 'pointer', letterSpacing: '0.03em',
+            }}>Áp dụng &amp; In</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function PalletCreatePanel({ profile, onCreated }: { profile: Profile; onCreated: () => void }) {
   const [prefix, setPrefix] = useState('PL')
   const [customPrefix, setCustomPrefix] = useState('')
@@ -21,50 +274,106 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
   const [loading, setLoading] = useState(false)
   const [created, setCreated] = useState<Pallet[]>([])
   const [toast, setToast] = useState('')
+  const [showLabelSettings, setShowLabelSettings] = useState(false)
+  const [labelSettings, setLabelSettings] = useState<LabelSettings>(DEFAULT_LABEL_SETTINGS)
+
+  // Lưu QR dataURL và barcode SVG string riêng — không dùng DOM clone
+  const qrDataUrls = useRef<Record<string, string>>({})
+  const barcodeSvgs = useRef<Record<string, string>>({})
 
   const activePrefix = customPrefix.toUpperCase() || prefix
 
-  // Chỉ in label area — mở popup riêng
-  function printLabelsOnly() {
-    const area = document.getElementById('label-print-area')
-    if (!area) return
-    const win = window.open('', '_blank', 'width=900,height=700')
-    if (!win) return
-    win.document.write(`<!DOCTYPE html>
+  function buildPrintHtml(pallets: Pallet[], s: LabelSettings): string {
+    const isA4 = s.preset === 'a4'
+    const labelCss = isA4
+      ? `.item { width: calc(${100 / s.colsPerRow}% - ${Math.ceil(8 * (s.colsPerRow - 1) / s.colsPerRow)}px); }`
+      : `.item { width: ${s.widthMm}mm; min-height: ${s.heightMm}mm; }`
+
+    const itemsHtml = pallets.map(p => {
+      const qrImg = s.showQr && qrDataUrls.current[p.id]
+        ? `<img src="${qrDataUrls.current[p.id]}" style="width:100px;height:100px;" />`
+        : ''
+      const bcSvg = s.showBarcode && barcodeSvgs.current[p.id]
+        ? barcodeSvgs.current[p.id]
+        : ''
+      const dateStr = s.showDate
+        ? `<div class="date">${new Date(p.created_at).toLocaleDateString('vi-VN')}</div>`
+        : ''
+      const noteStr = s.showNote && p.note
+        ? `<div class="note">${p.note}</div>`
+        : ''
+      return `<div class="item">
+  <div class="hdr">WMS — RECEIVER STATION</div>
+  ${qrImg}
+  ${bcSvg}
+  <div class="code">${p.code}</div>
+  ${dateStr}
+  ${noteStr}
+</div>`
+    }).join('\n')
+
+    return `<!DOCTYPE html>
 <html>
 <head>
   <title>In nhãn Pallet</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { background: white; font-family: monospace; padding: 16px; }
-    .wrap { display: flex; flex-wrap: wrap; gap: 16px; }
+    body { background: white; font-family: monospace; padding: ${isA4 ? '8mm' : '4px'}; }
+    .wrap { display: flex; flex-wrap: wrap; gap: 8px; ${isA4 ? 'width:100%;' : ''} }
     .item {
       border: 1px solid #ccc; border-radius: 8px;
-      padding: 16px 20px; display: flex; flex-direction: column;
-      align-items: center; gap: 8px; min-width: 220px;
+      padding: 12px 16px; display: flex; flex-direction: column;
+      align-items: center; gap: 6px;
       break-inside: avoid; page-break-inside: avoid;
     }
-    .hdr {
-      font-size: 10px; color: #999; letter-spacing: .12em;
-      text-transform: uppercase; font-weight: 700;
-      border-bottom: 1px solid #eee; padding-bottom: 8px;
-      width: 100%; text-align: center;
-    }
-    .code { font-size: 12px; font-weight: 600; letter-spacing: .04em; text-align: center; }
-    .date { font-size: 10px; color: #999; text-align: center; }
-    .note { font-size: 10px; color: #777; text-align: center; }
-    canvas, svg { display: block; max-width: 100%; }
-    @media print { body { padding: 8px; } .wrap { gap: 8px; } }
+    ${labelCss}
+    .hdr { font-size: 9px; color: #999; letter-spacing:.1em; text-transform:uppercase; font-weight:700;
+           border-bottom:1px solid #eee; padding-bottom:6px; width:100%; text-align:center; }
+    .code { font-size: 11px; font-weight: 600; letter-spacing:.04em; }
+    .date { font-size: 10px; color: #999; }
+    .note { font-size: 10px; color: #777; }
+    img, svg { display: block; max-width: 100%; }
+    @media print { body { padding: ${isA4 ? '8mm' : '2px'}; } .wrap { gap: 6px; } }
   </style>
 </head>
 <body>
-  <div class="wrap">${area.innerHTML}</div>
-  <script>
-    window.onload = function() { setTimeout(function() { window.print(); window.close(); }, 800); }
-  <\/script>
+  <div class="wrap">${itemsHtml}</div>
 </body>
-</html>`)
-    win.document.close()
+</html>`
+  }
+
+  function printWithSettings(pallets: Pallet[], s: LabelSettings) {
+    if (pallets.length === 0) return
+
+    // Xóa iframe cũ nếu còn
+    document.getElementById('__print_iframe')?.remove()
+
+    const iframe = document.createElement('iframe')
+    iframe.id = '__print_iframe'
+    iframe.style.cssText = 'position:fixed;top:0;left:0;width:0;height:0;border:none;visibility:hidden;'
+    document.body.appendChild(iframe)
+
+    const doc = iframe.contentWindow?.document
+    if (!doc) return
+    doc.open()
+    doc.write(buildPrintHtml(pallets, s))
+    doc.close()
+
+    // Chờ load xong rồi print — không cần timeout dài vì không có canvas/script bên trong
+    iframe.onload = () => {
+      iframe.contentWindow?.print()
+      setTimeout(() => iframe.remove(), 1000)
+    }
+  }
+
+  function handleApplyAndPrint(s: LabelSettings) {
+    setLabelSettings(s)
+    setShowLabelSettings(false)
+    printWithSettings(created, s)
+  }
+
+  function handleQuickPrint() {
+    printWithSettings(created, labelSettings)
   }
 
   useEffect(() => {
@@ -131,23 +440,21 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
     const QRCode = (await import('qrcode')).default
     const JsBarcode = (await import('jsbarcode')).default
     for (const p of pallets) {
-      // Preview trên màn hình
+      // QR: render vào canvas preview + lưu dataURL để in
       try {
         const c = document.getElementById(`qr-${p.id}`) as HTMLCanvasElement | null
-        if (c) await QRCode.toCanvas(c, p.code, { width: 100, margin: 1 })
+        if (c) {
+          await QRCode.toCanvas(c, p.code, { width: 100, margin: 1 })
+          qrDataUrls.current[p.id] = c.toDataURL('image/png')
+        }
       } catch { /* ignore */ }
+      // Barcode: render vào SVG preview + lưu outerHTML để in
       try {
         const s = document.getElementById(`bc-${p.id}`)
-        if (s) JsBarcode(s, p.code, { format: 'CODE128', width: 1.5, height: 48, displayValue: false, margin: 4 })
-      } catch { /* ignore */ }
-      // Print area (popup in)
-      try {
-        const cp = document.getElementById(`qr-print-${p.id}`) as HTMLCanvasElement | null
-        if (cp) await QRCode.toCanvas(cp, p.code, { width: 100, margin: 1 })
-      } catch { /* ignore */ }
-      try {
-        const sp = document.getElementById(`bc-print-${p.id}`)
-        if (sp) JsBarcode(sp, p.code, { format: 'CODE128', width: 1.5, height: 48, displayValue: false, margin: 4 })
+        if (s) {
+          JsBarcode(s, p.code, { format: 'CODE128', width: 1.5, height: 48, displayValue: false, margin: 4 })
+          barcodeSvgs.current[p.id] = s.outerHTML
+        }
       } catch { /* ignore */ }
     }
   }
@@ -181,26 +488,26 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
               </div>
               <input value={customPrefix} onChange={e => setCustomPrefix(e.target.value.toUpperCase().slice(0, 4))}
                 placeholder="Hoặc nhập tùy chỉnh (VD: WH)"
-                style={{ width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, color: '#1a1916', fontFamily: 'monospace', fontSize: 13, padding: '9px 12px', outline: 'none' }} />
+                style={{ width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, color: '#1a1916', fontFamily: 'monospace', fontSize: 13, padding: '9px 12px', outline: 'none', boxSizing: 'border-box' }} />
             </div>
 
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
               <div>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#6b6a64', marginBottom: 6 }}>Ngày tham chiếu</label>
                 <input type="date" value={refDate} onChange={e => setRefDate(e.target.value)}
-                  style={{ width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, color: '#1a1916', fontSize: 13, padding: '9px 12px', outline: 'none' }} />
+                  style={{ width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, color: '#1a1916', fontSize: 13, padding: '9px 12px', outline: 'none', boxSizing: 'border-box' }} />
               </div>
               <div>
                 <label style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#6b6a64', marginBottom: 6 }}>Số lượng</label>
                 <input type="number" value={qty} onChange={e => setQty(Math.max(1, Math.min(50, +e.target.value)))} min={1} max={50}
-                  style={{ width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, color: '#1a1916', fontFamily: 'monospace', fontSize: 13, padding: '9px 12px', outline: 'none' }} />
+                  style={{ width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, color: '#1a1916', fontFamily: 'monospace', fontSize: 13, padding: '9px 12px', outline: 'none', boxSizing: 'border-box' }} />
               </div>
             </div>
 
             <div style={{ marginBottom: 16 }}>
               <label style={{ display: 'block', fontSize: 12, fontWeight: 500, color: '#6b6a64', marginBottom: 6 }}>Ghi chú (tùy chọn)</label>
               <input value={note} onChange={e => setNote(e.target.value)} placeholder="VD: Hàng Supplier A, PO-2025..."
-                style={{ width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, color: '#1a1916', fontSize: 13, padding: '9px 12px', outline: 'none' }} />
+                style={{ width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, color: '#1a1916', fontSize: 13, padding: '9px 12px', outline: 'none', boxSizing: 'border-box' }} />
             </div>
 
             <div style={{ background: '#f0efe9', border: '1px dashed rgba(0,0,0,0.15)', borderRadius: 8, padding: '12px 14px', fontFamily: 'monospace', fontSize: 15, fontWeight: 600, textAlign: 'center', marginBottom: 16, letterSpacing: '0.04em' }}>
@@ -219,18 +526,48 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
         <div>
           <div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16, overflow: 'hidden', marginBottom: 14 }}>
             <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(0,0,0,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontFamily: 'var(--font-display, sans-serif)', fontSize: 14, fontWeight: 700 }}>Xem trước nhãn in</span>
-              <button
-                onClick={printLabelsOnly}
-                disabled={created.length === 0}
-                style={{
-                  background: 'transparent', color: created.length === 0 ? '#ccc' : '#0d4a8f',
-                  border: `1px solid ${created.length === 0 ? '#ccc' : 'rgba(13,74,143,0.3)'}`,
-                  borderRadius: 6, fontSize: 12, padding: '6px 14px',
-                  cursor: created.length === 0 ? 'not-allowed' : 'pointer',
+              <div>
+                <span style={{ fontFamily: 'var(--font-display, sans-serif)', fontSize: 14, fontWeight: 700 }}>Xem trước nhãn in</span>
+                {/* Badge hiển thị cài đặt hiện tại */}
+                <span style={{
+                  marginLeft: 10, fontSize: 11, color: '#6b6a64',
+                  background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)',
+                  borderRadius: 6, padding: '2px 8px', fontFamily: 'monospace',
                 }}>
-                ⎙ In nhãn
-              </button>
+                  {labelSettings.preset === 'a4'
+                    ? `A4 · ${labelSettings.colsPerRow} cột`
+                    : `${labelSettings.widthMm}×${labelSettings.heightMm}mm`}
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {/* Nút cài đặt */}
+                <button
+                  onClick={() => setShowLabelSettings(true)}
+                  style={{
+                    background: 'transparent', color: '#6b6a64',
+                    border: '1px solid rgba(0,0,0,0.12)',
+                    borderRadius: 6, fontSize: 12, padding: '6px 12px',
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
+                  }}>
+                  <svg width="13" height="13" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M8 10a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" fill="currentColor"/>
+                    <path fillRule="evenodd" clipRule="evenodd" d="M8 1a1 1 0 0 1 .98.804l.23 1.15a5.02 5.02 0 0 1 1.06.617l1.1-.44a1 1 0 0 1 1.225.447l1 1.732a1 1 0 0 1-.225 1.277l-.9.72a5.1 5.1 0 0 1 0 1.186l.9.72a1 1 0 0 1 .225 1.277l-1 1.732a1 1 0 0 1-1.225.447l-1.1-.44a5.02 5.02 0 0 1-1.06.617l-.23 1.15A1 1 0 0 1 8 15a1 1 0 0 1-.98-.804l-.23-1.15a5.02 5.02 0 0 1-1.06-.617l-1.1.44a1 1 0 0 1-1.225-.447l-1-1.732a1 1 0 0 1 .225-1.277l.9-.72a5.1 5.1 0 0 1 0-1.186l-.9-.72a1 1 0 0 1-.225-1.277l1-1.732A1 1 0 0 1 4.63 3.13l1.1.44a5.02 5.02 0 0 1 1.06-.617l.23-1.15A1 1 0 0 1 8 1zm0 2a3 3 0 1 0 0 6 3 3 0 0 0 0-6z" fill="currentColor"/>
+                  </svg>
+                  Cài đặt nhãn
+                </button>
+                {/* Nút in nhanh */}
+                <button
+                  onClick={handleQuickPrint}
+                  disabled={created.length === 0}
+                  style={{
+                    background: 'transparent', color: created.length === 0 ? '#ccc' : '#0d4a8f',
+                    border: `1px solid ${created.length === 0 ? '#ccc' : 'rgba(13,74,143,0.3)'}`,
+                    borderRadius: 6, fontSize: 12, padding: '6px 14px',
+                    cursor: created.length === 0 ? 'not-allowed' : 'pointer',
+                  }}>
+                  ⎙ In nhãn
+                </button>
+              </div>
             </div>
 
             {/* Label preview — hiển thị trên màn hình */}
@@ -249,25 +586,12 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
                   <div style={{ fontSize: 10, color: '#999', letterSpacing: '0.12em', textTransform: 'uppercase', fontWeight: 700, borderBottom: '1px solid #eee', paddingBottom: 8, width: '100%', textAlign: 'center' }}>
                     WMS — RECEIVER STATION
                   </div>
-                  <canvas id={`qr-${p.id}`} />
-                  <svg id={`bc-${p.id}`} />
+                  {/* Canvas + SVG luôn render để lưu data, ẩn/hiện qua style */}
+                  <canvas id={`qr-${p.id}`} style={{ display: labelSettings.showQr ? 'block' : 'none' }} />
+                  <svg id={`bc-${p.id}`} style={{ display: labelSettings.showBarcode ? 'block' : 'none' }} />
                   <div style={{ fontFamily: 'monospace', fontSize: 12, fontWeight: 600, letterSpacing: '0.04em' }}>{p.code}</div>
-                  <div style={{ fontSize: 10, color: '#999', fontFamily: 'monospace' }}>{new Date(p.created_at).toLocaleDateString('vi-VN')}</div>
-                  {p.note && <div style={{ fontSize: 10, color: '#777' }}>{p.note}</div>}
-                </div>
-              ))}
-            </div>
-
-            {/* Hidden area dùng để copy sang popup in — dùng class thay vì canvas/svg để tránh mất data */}
-            <div id="label-print-area" style={{ display: 'none' }}>
-              {created.map(p => (
-                <div key={p.id} className="item">
-                  <div className="hdr">WMS — RECEIVER STATION</div>
-                  <canvas id={`qr-print-${p.id}`} />
-                  <svg id={`bc-print-${p.id}`} />
-                  <div className="code">{p.code}</div>
-                  <div className="date">{new Date(p.created_at).toLocaleDateString('vi-VN')}</div>
-                  {p.note && <div className="note">{p.note}</div>}
+                  {labelSettings.showDate && <div style={{ fontSize: 10, color: '#999', fontFamily: 'monospace' }}>{new Date(p.created_at).toLocaleDateString('vi-VN')}</div>}
+                  {labelSettings.showNote && p.note && <div style={{ fontSize: 10, color: '#777' }}>{p.note}</div>}
                 </div>
               ))}
             </div>
@@ -302,6 +626,15 @@ export default function PalletCreatePanel({ profile, onCreated }: { profile: Pro
           )}
         </div>
       </div>
+
+      {/* Label Settings Modal */}
+      {showLabelSettings && (
+        <LabelSettingsModal
+          settings={labelSettings}
+          onClose={() => setShowLabelSettings(false)}
+          onApply={handleApplyAndPrint}
+        />
+      )}
 
       {toast && (
         <div style={{ position: 'fixed', bottom: 24, right: 24, background: '#1a1916', color: '#fff', borderRadius: 8, padding: '12px 18px', fontSize: 13, boxShadow: '0 4px 20px rgba(0,0,0,0.2)', zIndex: 999 }}>
