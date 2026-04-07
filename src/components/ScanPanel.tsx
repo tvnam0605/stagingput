@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback, useRef, Fragment } from 'react'
 import { supabase } from '@/lib/supabase'
 import type { Profile, Pallet, Box } from '@/lib/types'
 import { StatusBadge } from '@/app/page'
@@ -23,14 +23,32 @@ type BoxDetail = {
   arrived_at: string | null
   leadtime_hours: number | null
   aging_level: 'green' | 'yellow' | 'orange' | 'red' | null
-  skus: { sku_id: string; sku_name: string; received_quantity: number; quantity_on_rack: number; expiration_date: string | null }[]
+  skus: {
+    sku_id: string
+    sku_name: string
+    received_quantity: number
+    quantity_on_rack: number
+    expiration_date: string | null
+  }[]
 }
 
-const AGING_COLOR: Record<string, { bg: string; text: string; label: string }> = {
+const AGING: Record<string, { bg: string; text: string; label: string }> = {
   green:  { bg: '#dcfce7', text: '#166534', label: 'Fresh' },
   yellow: { bg: '#fef9c3', text: '#854d0e', label: 'Normal' },
   orange: { bg: '#ffedd5', text: '#9a3412', label: 'Attention' },
-  red:    { bg: '#fee2e2', text: '#991b1b', label: 'Expired' },
+  red:    { bg: '#fee2e2', text: '#991b1b', label: 'Critical' },
+}
+
+function fmtExpiry(ts: number) {
+  if (!ts) return null
+  return new Date(ts * 1000).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+const TH: React.CSSProperties = {
+  fontSize: 10, fontWeight: 500, color: '#a09e96',
+  textAlign: 'left', padding: '7px 12px',
+  borderBottom: '1px solid rgba(0,0,0,0.07)',
+  background: '#f5f4f0', whiteSpace: 'nowrap',
 }
 
 export default function ScanPanel({ profile, onUpdated }: { profile: Profile; onUpdated: () => void }) {
@@ -45,11 +63,10 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
   const [toast,          setToast]          = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // ── Data fetching ──────────────────────────────────────────────────────────
+  // ── Fetch ──────────────────────────────────────────────────────────────────
   const fetchActivePallets = useCallback(async () => {
     const { data } = await supabase
-      .from('pallets')
-      .select('*')
+      .from('pallets').select('*')
       .in('status', ['pending', 'ongoing'])
       .order('created_at', { ascending: false })
     setActivePallets((data as Pallet[]) ?? [])
@@ -57,8 +74,7 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
 
   const fetchBoxes = useCallback(async (palletId: string) => {
     const { data } = await supabase
-      .from('boxes')
-      .select('*')
+      .from('boxes').select('*')
       .eq('pallet_id', palletId)
       .order('scanned_at', { ascending: false })
     setBoxes((data as Box[]) ?? [])
@@ -66,10 +82,9 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
 
   async function fetchBoxDetail(code: string): Promise<BoxDetail | null> {
     const { data } = await supabase
-      .from('receiver_box_detail')
-      .select('*')
+      .from('receiver_box_detail').select('*')
       .eq('box_code', code)
-      .single()
+      .maybeSingle()
     return data as BoxDetail | null
   }
 
@@ -121,18 +136,10 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
     }
 
     setLoading(true)
-
     const { error } = await supabase.from('boxes').insert({
-      box_code:   code,
-      pallet_id:  selectedPallet.id,
-      scanned_by: profile.id,
+      box_code: code, pallet_id: selectedPallet.id, scanned_by: profile.id,
     })
-
-    if (error) {
-      showToast(`Lỗi: ${error.message}`, 'err')
-      setLoading(false)
-      return
-    }
+    if (error) { showToast(error.message, 'err'); setLoading(false); return }
 
     if (selectedPallet.status === 'pending') {
       await supabase.from('pallets').update({ status: 'ongoing' }).eq('id', selectedPallet.id)
@@ -140,15 +147,11 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
     }
 
     await supabase.from('activity_log').insert({
-      event_type:  'box_scanned',
-      pallet_id:   selectedPallet.id,
-      pallet_code: selectedPallet.code,
-      box_code:    code,
-      user_id:     profile.id,
-      user_email:  profile.email,
+      event_type: 'box_scanned', pallet_id: selectedPallet.id,
+      pallet_code: selectedPallet.code, box_code: code,
+      user_id: profile.id, user_email: profile.email,
     })
 
-    // Fetch detail cho box vừa scan rồi auto-expand
     const detail = await fetchBoxDetail(code)
     if (detail) {
       setBoxDetails(prev => ({ ...prev, [code]: detail }))
@@ -178,12 +181,9 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
     onUpdated()
   }
 
-  // ── Toggle expand — lazy load detail nếu chưa có ──────────────────────────
+  // ── Toggle expand ──────────────────────────────────────────────────────────
   async function toggleExpand(box: Box) {
-    if (expandedBox === box.box_code) {
-      setExpandedBox(null)
-      return
-    }
+    if (expandedBox === box.box_code) { setExpandedBox(null); return }
     if (!boxDetails[box.box_code]) {
       const detail = await fetchBoxDetail(box.box_code)
       if (detail) setBoxDetails(prev => ({ ...prev, [box.box_code]: detail }))
@@ -197,40 +197,24 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
     if (!confirm(`Chốt pallet ${selectedPallet.code} với ${boxes.length} box?`)) return
 
     const { error } = await supabase.from('pallets').update({
-      status:  'received',
-      done_by: profile.id,
-      done_at: new Date().toISOString(),
+      status: 'received', done_by: profile.id, done_at: new Date().toISOString(),
     }).eq('id', selectedPallet.id)
-
     if (error) { showToast('Lỗi khi chốt!', 'err'); return }
 
     await supabase.from('activity_log').insert({
-      event_type:  'pallet_done',
-      pallet_id:   selectedPallet.id,
-      pallet_code: selectedPallet.code,
-      user_id:     profile.id,
-      user_email:  profile.email,
-      meta:        { box_count: boxes.length },
+      event_type: 'pallet_done', pallet_id: selectedPallet.id,
+      pallet_code: selectedPallet.code, user_id: profile.id,
+      user_email: profile.email, meta: { box_count: boxes.length },
     })
 
     showToast(`Chốt ${selectedPallet.code} — ${boxes.length} box`)
-    setSelectedPallet(null)
-    setBoxes([])
-    setBoxDetails({})
-    setExpandedBox(null)
-    fetchActivePallets()
-    onUpdated()
+    setSelectedPallet(null); setBoxes([]); setBoxDetails({}); setExpandedBox(null)
+    fetchActivePallets(); onUpdated()
   }
 
   const filtered = activePallets.filter(p =>
     !palletSearch || p.code.toLowerCase().includes(palletSearch.toLowerCase())
   )
-  function fmtExpiry(ts: number) {
-  if (!ts) return null
-  return new Date(ts * 1000).toLocaleDateString('vi-VN', {
-    day: '2-digit', month: '2-digit', year: 'numeric'
-  })
-}
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -240,40 +224,37 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
         <p style={{ fontSize: 13, color: '#6b6a64' }}>Chọn pallet → scan từng box → nhấn Done để chốt</p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 20, alignItems: 'start' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '300px 1fr', gap: 20, alignItems: 'start' }}>
 
-        {/* ── Pallet list ─────────────────────────────────────────────────── */}
-        <div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16, overflow: 'hidden' }}>
-          <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(0,0,0,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ fontFamily: F.display, fontSize: 14, fontWeight: 700 }}>Chọn Pallet</span>
+        {/* ── Pallet list (sticky) ── */}
+        <div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16, overflow: 'hidden', position: 'sticky', top: 16 }}>
+          <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(0,0,0,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontFamily: F.display, fontSize: 13, fontWeight: 700 }}>Chọn Pallet</span>
             <span style={{ fontSize: 12, color: '#a09e96' }}>{activePallets.length} active</span>
           </div>
-          <div style={{ padding: 12 }}>
+          <div style={{ padding: 10 }}>
             <input
               value={palletSearch}
               onChange={e => setPalletSearch(e.target.value)}
               placeholder="Tìm mã pallet..."
               style={{
-                width: '100%', background: '#f0efe9',
-                border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8,
-                color: '#1a1916', fontFamily: F.code, fontSize: 13,
-                padding: '9px 12px', outline: 'none',
-                marginBottom: 10, boxSizing: 'border-box',
+                width: '100%', background: '#f0efe9', border: '1px solid rgba(0,0,0,0.1)',
+                borderRadius: 8, color: '#1a1916', fontFamily: F.code, fontSize: 13,
+                padding: '8px 12px', outline: 'none', marginBottom: 8, boxSizing: 'border-box',
               }}
             />
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 360, overflowY: 'auto' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 5, maxHeight: 420, overflowY: 'auto' }}>
               {filtered.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '24px 0', color: '#a09e96', fontSize: 13 }}>
+                <div style={{ textAlign: 'center', padding: '20px 0', color: '#a09e96', fontSize: 13 }}>
                   Không có pallet đang hoạt động
                 </div>
               ) : filtered.map(p => (
                 <div
-                  key={p.id}
-                  onClick={() => selectPallet(p)}
+                  key={p.id} onClick={() => selectPallet(p)}
                   style={{
                     background: selectedPallet?.id === p.id ? '#e8f0fb' : '#f5f4f0',
                     border: `1px solid ${selectedPallet?.id === p.id ? 'rgba(13,74,143,0.3)' : 'rgba(0,0,0,0.07)'}`,
-                    borderRadius: 8, padding: '10px 14px', cursor: 'pointer',
+                    borderRadius: 8, padding: '9px 12px', cursor: 'pointer',
                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   }}
                 >
@@ -291,7 +272,7 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
           </div>
         </div>
 
-        {/* ── Scan area ───────────────────────────────────────────────────── */}
+        {/* ── Phần phải ── */}
         {!selectedPallet ? (
           <div style={{
             background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16,
@@ -304,7 +285,7 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
-            {/* Pallet info bar */}
+            {/* ── Block 1: Pallet info + scan input ── */}
             <div style={{ background: '#1a1916', borderRadius: 16, padding: '16px 20px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
                 <div>
@@ -313,7 +294,7 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
                 </div>
                 <StatusBadge status={selectedPallet.status} />
               </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 12 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 16, borderTop: '1px solid rgba(255,255,255,0.08)', paddingTop: 12, marginBottom: 14 }}>
                 {[
                   { k: 'Prefix', v: selectedPallet.prefix },
                   { k: 'Ngày', v: selectedPallet.date_str.replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3') },
@@ -326,229 +307,272 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
                 ))}
               </div>
               {selectedPallet.note && (
-                <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginTop: 12, paddingTop: 12, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-                  <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', whiteSpace: 'nowrap', paddingTop: 1 }}>Ghi chú</span>
-                  <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)', lineHeight: 1.5 }}>{selectedPallet.note}</span>
+                <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', marginBottom: 14, paddingTop: 12, display: 'flex', gap: 8 }}>
+                  <span style={{ fontSize: 11, color: 'rgba(255,255,255,0.35)', whiteSpace: 'nowrap' }}>Ghi chú</span>
+                  <span style={{ fontSize: 13, color: 'rgba(255,255,255,0.8)' }}>{selectedPallet.note}</span>
                 </div>
               )}
+              {/* Scan input */}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <input
+                  ref={inputRef}
+                  value={boxInput}
+                  onChange={e => setBoxInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && addBox()}
+                  placeholder="Scan hoặc nhập Box ID... (Enter)"
+                  style={{
+                    flex: 1, background: 'rgba(255,255,255,0.1)', border: '1px solid rgba(255,255,255,0.2)',
+                    borderRadius: 8, color: '#fff', fontFamily: F.code, fontSize: 15,
+                    padding: '11px 14px', outline: 'none',
+                  }}
+                  autoFocus
+                />
+                <button
+                  onClick={addBox}
+                  disabled={loading || !boxInput.trim()}
+                  style={{
+                    background: '#fff', color: '#1a1916', border: 'none', borderRadius: 8,
+                    fontSize: 13, fontWeight: 700, padding: '0 20px', cursor: 'pointer',
+                    opacity: (!boxInput.trim() || loading) ? 0.4 : 1,
+                  }}
+                >
+                  + Thêm
+                </button>
+              </div>
             </div>
 
-            {/* Scan input + box list */}
-            <div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16, overflow: 'hidden' }}>
-              <div style={{ padding: '14px 20px', borderBottom: '1px solid rgba(0,0,0,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontFamily: F.display, fontSize: 14, fontWeight: 700 }}>Scan Box ID</span>
-                <span style={{ fontFamily: F.code, fontSize: 12, background: '#e8f0fb', color: '#0d4a8f', border: '1px solid rgba(13,74,143,0.2)', borderRadius: 20, padding: '2px 10px' }}>
-                  {boxes.length} box
-                </span>
-              </div>
-              <div style={{ padding: 16 }}>
+            {/* ── Block 2: Box list dạng table ── */}
+{/* ── Block 2: Box list ── */}
+<div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+  {/* Header */}
+  <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(0,0,0,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
+    <span style={{ fontFamily: F.display, fontSize: 13, fontWeight: 700 }}>Danh sách box</span>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+      {Object.entries(AGING).map(([k, v]) => (
+        <span key={k} style={{ fontSize: 10, fontWeight: 500, background: v.bg, color: v.text, borderRadius: 4, padding: '2px 6px' }}>
+          {v.label}
+        </span>
+      ))}
+      <span style={{ fontFamily: F.code, fontSize: 12, background: '#e8f0fb', color: '#0d4a8f', border: '1px solid rgba(13,74,143,0.2)', borderRadius: 20, padding: '2px 10px', marginLeft: 4 }}>
+        {boxes.length} box
+      </span>
+    </div>
+  </div>
 
-                {/* Input */}
-                <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-                  <input
-                    ref={inputRef}
-                    value={boxInput}
-                    onChange={e => setBoxInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && addBox()}
-                    placeholder="Scan hoặc nhập Box ID... (Enter)"
-                    style={{
-                      flex: 1, background: '#f5f4f0',
-                      border: '2px solid rgba(0,0,0,0.12)', borderRadius: 8,
-                      color: '#1a1916', fontFamily: F.code, fontSize: 15,
-                      padding: '11px 14px', outline: 'none',
-                    }}
-                    autoFocus
-                  />
-                  <button
-                    onClick={addBox}
-                    disabled={loading || !boxInput.trim()}
-                    style={{
-                      background: '#1a1916', color: '#fff', border: 'none',
-                      borderRadius: 8, fontSize: 13, fontWeight: 600,
-                      padding: '0 20px', cursor: 'pointer',
-                      opacity: (!boxInput.trim() || loading) ? 0.4 : 1,
-                    }}
-                  >
-                    + Thêm
-                  </button>
-                </div>
+  {boxes.length === 0 ? (
+    <div style={{ textAlign: 'center', padding: '40px 0', color: '#a09e96', fontSize: 13 }}>
+      Chưa có box. Bắt đầu scan...
+    </div>
+  ) : (
+    /* Scroll container — chiếm hết không gian còn lại của viewport */
+    <div style={{ overflowY: 'auto', maxHeight: 'calc(100vh - 420px)', minHeight: 200 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 700 }}>
+        <colgroup>
+          <col style={{ width: 36 }} />
+          <col style={{ width: 140 }} />
+          <col style={{ width: 72 }} />
+          <col style={{ width: 130 }} />
+          <col style={{ width: 150 }} />
+          <col style={{ width: 130 }} />
+          <col style={{ width: 72 }} />
+          <col style={{ width: 64 }} />
+        </colgroup>
 
-                {/* Box list */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 480, overflowY: 'auto', marginBottom: 14 }}>
-                  {boxes.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '24px 0', color: '#a09e96', fontSize: 13 }}>
-                      Chưa có box. Bắt đầu scan...
+        {/* Sticky thead */}
+        <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+          <tr>
+            {['#', 'Box code', 'Giờ scan', 'ASN', 'Device', 'Aging', 'SKUs', ''].map((h, i) => (
+              <th key={i} style={{ ...TH, position: 'sticky', top: 0, textAlign: i >= 6 ? 'center' : 'left' }}>{h}</th>
+            ))}
+          </tr>
+        </thead>
+
+        <tbody>
+          {boxes.map((b, idx) => {
+            const isExpanded = expandedBox === b.box_code
+            const detail = boxDetails[b.box_code]
+            const aging = detail?.aging_level ? AGING[detail.aging_level] : null
+
+            const tdBase: React.CSSProperties = {
+              padding: '9px 12px',
+              borderBottom: '1px solid rgba(0,0,0,0.05)',
+              background: isExpanded ? '#f5f4f0' : '#fff',
+              cursor: 'pointer',
+              verticalAlign: 'middle',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }
+
+            return (
+  <Fragment key={b.id}>
+    <tr onClick={() => toggleExpand(b)}>
+      <td style={{ ...tdBase, fontSize: 11, color: '#a09e96', fontFamily: F.code }}>
+        {boxes.length - idx}
+      </td>
+      <td style={{ ...tdBase, fontFamily: F.code, fontSize: 13, fontWeight: 600 }}>
+        {b.box_code}
+      </td>
+      <td style={{ ...tdBase, fontFamily: F.code, fontSize: 11, color: '#a09e96' }}>
+        {new Date(b.scanned_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+      </td>
+      <td style={{ ...tdBase, fontFamily: F.code, fontSize: 11, color: detail?.asn_id ? '#1a1916' : '#a09e96' }}>
+        {detail?.asn_id ?? '—'}
+      </td>
+      <td style={{ ...tdBase, fontSize: 11, color: '#6b6a64' }}>
+        {detail?.device_status_label ?? '—'}
+      </td>
+      <td style={tdBase}>
+        {aging && detail?.leadtime_hours != null ? (
+          <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 4, padding: '2px 7px', background: aging.bg, color: aging.text, whiteSpace: 'nowrap' }}>
+            {Math.round(detail.leadtime_hours)}h · {aging.label}
+          </span>
+        ) : (
+          detail === undefined
+            ? <span style={{ color: '#c0beb6', fontSize: 11 }}>...</span>
+            : <span style={{ color: '#a09e96', fontSize: 11 }}>—</span>
+        )}
+      </td>
+      <td style={{ ...tdBase, fontSize: 11, color: '#6b6a64', textAlign: 'center' }}>
+        {detail?.skus?.length ? `${detail.skus.length} SKU` : <span style={{ color: '#a09e96' }}>—</span>}
+      </td>
+      <td style={{ ...tdBase, textAlign: 'center' }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+          <button
+            onClick={e => { e.stopPropagation(); toggleExpand(b) }}
+            style={{
+              fontSize: 11, padding: '3px 8px', borderRadius: 5,
+              border: '1px solid rgba(0,0,0,0.12)',
+              background: isExpanded ? '#1a1916' : 'transparent',
+              color: isExpanded ? '#fff' : '#6b6a64',
+              cursor: 'pointer',
+            }}
+          >
+            {isExpanded ? '▲' : '▼'}
+          </button>
+          <button
+            onClick={e => { e.stopPropagation(); removeBox(b) }}
+            style={{
+              width: 22, height: 22, borderRadius: 4,
+              border: '1px solid rgba(0,0,0,0.1)',
+              background: 'transparent', cursor: 'pointer',
+              color: '#a09e96', fontSize: 12,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}
+          >✕</button>
+        </div>
+      </td>
+    </tr>
+
+    {isExpanded && (
+      <tr>
+        <td colSpan={8} style={{ padding: 0, borderBottom: '1px solid rgba(0,0,0,0.07)' }}>
+          <div style={{ padding: '12px 16px', background: '#fafaf8', display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {!detail ? (
+              <div style={{ textAlign: 'center', fontSize: 12, color: '#a09e96', padding: '8px 0' }}>Đang tải...</div>
+            ) : (
+              <>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8 }}>
+                  <div style={{ background: '#f0efe9', borderRadius: 7, padding: '8px 10px' }}>
+                    <div style={{ fontSize: 10, color: '#a09e96', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>ASN / Order</div>
+                    <div style={{ fontFamily: F.code, fontSize: 12, fontWeight: 600 }}>{detail.asn_id ?? '—'}</div>
+                    {detail.asn_status_label && <div style={{ fontSize: 10, color: '#6b6a64', marginTop: 2 }}>{detail.asn_status_label}</div>}
+                  </div>
+                  <div style={{ background: '#f0efe9', borderRadius: 7, padding: '8px 10px' }}>
+                    <div style={{ fontSize: 10, color: '#a09e96', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Device status</div>
+                    <div style={{ fontSize: 12, fontWeight: 600 }}>{detail.device_status_label ?? '—'}</div>
+                    {detail.device_qty != null && <div style={{ fontSize: 10, color: '#6b6a64', marginTop: 2 }}>Qty: {detail.device_qty}</div>}
+                  </div>
+                  <div style={{ background: aging ? aging.bg : '#f0efe9', borderRadius: 7, padding: '8px 10px' }}>
+                    <div style={{ fontSize: 10, color: aging ? aging.text : '#a09e96', opacity: 0.8, marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Aging</div>
+                    <div style={{ fontFamily: F.code, fontSize: 16, fontWeight: 700, color: aging ? aging.text : '#1a1916' }}>
+                      {detail.leadtime_hours != null ? `${Math.round(detail.leadtime_hours)}h` : '—'}
                     </div>
-                  ) : boxes.map((b, idx) => {
-                    const isExpanded = expandedBox === b.box_code
-                    const detail = boxDetails[b.box_code]
-                    const aging = detail?.aging_level ? AGING_COLOR[detail.aging_level] : null
-
-                    return (
-                      <div key={b.id} style={{ border: '1px solid rgba(0,0,0,0.08)', borderRadius: 10, overflow: 'hidden' }}>
-
-                        {/* Row chính */}
-                        <div style={{
-                          background: isExpanded ? '#f0efe9' : '#f5f4f0',
-                          padding: '9px 12px',
-                          display: 'flex', alignItems: 'center', gap: 10,
-                        }}>
-                          <span style={{ fontFamily: F.code, fontSize: 11, color: '#a09e96', minWidth: 20 }}>
-                            {boxes.length - idx}
-                          </span>
-                          <div style={{ flex: 1 }}>
-                            <div style={{ fontFamily: F.code, fontSize: 13, fontWeight: 600 }}>{b.box_code}</div>
-                            <div style={{ fontSize: 11, color: '#a09e96', marginTop: 1 }}>
-                              {new Date(b.scanned_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                            </div>
-                          </div>
-
-                          {/* Aging badge nhỏ nếu có */}
-                          {aging && (
-                            <span style={{
-                              fontSize: 10, fontWeight: 600, borderRadius: 4, padding: '2px 7px',
-                              background: aging.bg, color: aging.text,
-                            }}>
-                              {detail!.leadtime_hours}h · {aging.label}
-                            </span>
-                          )}
-
-                          {/* Expand toggle */}
-                          <button
-                            onClick={() => toggleExpand(b)}
-                            style={{
-                              background: isExpanded ? '#1a1916' : 'transparent',
-                              color: isExpanded ? '#fff' : '#6b6a64',
-                              border: '1px solid rgba(0,0,0,0.12)',
-                              borderRadius: 5, fontSize: 11, padding: '4px 9px',
-                              cursor: 'pointer', whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {isExpanded ? '▲ Thu' : '▼ Chi tiết'}
-                          </button>
-
-                          <button
-                            onClick={() => removeBox(b)}
-                            style={{
-                              width: 24, height: 24, borderRadius: 4,
-                              border: '1px solid rgba(0,0,0,0.1)',
-                              background: 'transparent', cursor: 'pointer',
-                              color: '#a09e96', fontSize: 13, lineHeight: 1,
-                            }}
-                          >
-                            ✕
-                          </button>
-                        </div>
-
-                        {/* Expanded detail */}
-                        {isExpanded && (
-                          <div style={{ background: '#fff', borderTop: '1px solid rgba(0,0,0,0.07)', padding: '12px 14px' }}>
-                            {!detail ? (
-                              <div style={{ textAlign: 'center', fontSize: 12, color: '#a09e96', padding: '8px 0' }}>Đang tải...</div>
-                            ) : (
-                              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-
-                                {/* ASN + Aging row */}
-                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
-                                  <div style={{ background: '#f5f4f0', borderRadius: 7, padding: '8px 10px' }}>
-                                    <div style={{ fontSize: 10, color: '#a09e96', marginBottom: 3 }}>ASN / Order</div>
-                                    <div style={{ fontFamily: F.code, fontSize: 12, fontWeight: 600 }}>{detail.asn_id ?? '—'}</div>
-                                    {detail.asn_status_label && (
-                                      <div style={{ fontSize: 10, color: '#6b6a64', marginTop: 2 }}>{detail.asn_status_label}</div>
-                                    )}
-                                  </div>
-                                  <div style={{ background: '#f5f4f0', borderRadius: 7, padding: '8px 10px' }}>
-                                    <div style={{ fontSize: 10, color: '#a09e96', marginBottom: 3 }}>Device status</div>
-                                    <div style={{ fontSize: 12, fontWeight: 600 }}>{detail.device_status_label ?? '—'}</div>
-                                    {detail.device_qty != null && (
-                                      <div style={{ fontSize: 10, color: '#6b6a64', marginTop: 2 }}>Qty: {detail.device_qty}</div>
-                                    )}
-                                  </div>
-                                  {aging && detail.arrived_at && (
-                                    <div style={{ background: aging.bg, borderRadius: 7, padding: '8px 10px' }}>
-                                      <div style={{ fontSize: 10, color: aging.text, opacity: 0.7, marginBottom: 3 }}>Aging</div>
-                                      <div style={{ fontFamily: F.code, fontSize: 14, fontWeight: 700, color: aging.text }}>{detail.leadtime_hours}h</div>
-                                      <div style={{ fontSize: 10, color: aging.text, marginTop: 2 }}>
-                                        Arrived {new Date(detail.arrived_at).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
-                                      </div>
-                                    </div>
-                                  )}
-                                </div>
-
-                                {/* SKU list */}
-                                {detail.skus?.length > 0 && (
-                                  <div>
-                                    <div style={{ fontSize: 10, color: '#a09e96', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
-                                      SKUs ({detail.skus.length})
-                                    </div>
-                                    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                                      {detail.skus.map(s => (
-                                        <div key={s.sku_id} style={{
-                                          display: 'flex', alignItems: 'center', gap: 10,
-                                          background: '#f5f4f0', borderRadius: 6, padding: '7px 10px',
-                                        }}>
-                                          <span style={{ fontFamily: F.code, fontSize: 11, color: '#6b6a64', minWidth: 80 }}>{s.sku_id}</span>
-                                          <span style={{ fontSize: 12, flex: 1, color: '#1a1916' }}>{s.sku_name}</span>
-                                          <span style={{ fontFamily: F.code, fontSize: 11, color: '#a09e96', whiteSpace: 'nowrap' }}>
-                                            Recv: <strong style={{ color: '#1a1916' }}>{s.received_quantity}</strong>
-                                            {s.quantity_on_rack != null && (
-                                              <> · Rack: <strong style={{ color: '#1a1916' }}>{s.quantity_on_rack}</strong></>
-                                            )}
-                                          </span>
-                                          {s.expiration_date && (
-                                          <span style={{ fontSize: 10, color: '#b45309', background: '#fef3c7', borderRadius: 4, padding: '1px 6px', whiteSpace: 'nowrap' }}>
-HSD {fmtExpiry(Number(s.expiration_date))}                                          </span>
-                                        )}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  </div>
-                                )}
-
-                                {detail.skus?.length === 0 && (
-                                  <div style={{ fontSize: 12, color: '#a09e96', textAlign: 'center', padding: '4px 0' }}>
-                                    Chưa có SKU trong ASN
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
+                    {detail.arrived_at && (
+                      <div style={{ fontSize: 10, color: aging ? aging.text : '#6b6a64', marginTop: 2 }}>
+                        Arrived {new Date(detail.arrived_at).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                       </div>
-                    )
-                  })}
+                    )}
+                  </div>
                 </div>
 
-                {/* Actions */}
-                <div style={{ borderTop: '1px solid rgba(0,0,0,0.07)', paddingTop: 14, display: 'flex', gap: 10 }}>
-                  <button
-                    onClick={donePallet}
-                    disabled={boxes.length === 0}
-                    style={{
-                      flex: 1,
-                      background: boxes.length === 0 ? '#ccc' : '#1d6a3e',
-                      color: '#fff', border: 'none', borderRadius: 8,
-                      fontFamily: F.display, fontSize: 15, fontWeight: 700,
-                      padding: 14, cursor: boxes.length === 0 ? 'not-allowed' : 'pointer',
-                      letterSpacing: '0.03em',
-                    }}
-                  >
-                    DONE — Chốt Pallet ({boxes.length} box)
-                  </button>
-                  <button
-                    onClick={() => { setSelectedPallet(null); setBoxes([]); setBoxDetails({}); setExpandedBox(null) }}
-                    style={{
-                      background: 'transparent', color: '#6b6a64',
-                      border: '1px solid rgba(0,0,0,0.12)',
-                      borderRadius: 8, padding: '0 16px',
-                      cursor: 'pointer', fontSize: 13,
-                    }}
-                  >
-                    Huỷ
-                  </button>
-                </div>
-              </div>
-            </div>
+                {detail.skus?.length > 0 ? (
+                  <div>
+                    <div style={{ fontSize: 10, color: '#a09e96', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
+                      SKUs ({detail.skus.length})
+                    </div>
+                    <div style={{ border: '1px solid rgba(0,0,0,0.07)', borderRadius: 7, overflow: 'hidden' }}>
+                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                        <thead>
+                          <tr style={{ background: '#f5f4f0' }}>
+                            {['SKU ID', 'Tên hàng', 'Recv', 'Rack', 'HSD'].map((h, i) => (
+                              <th key={h} style={{ padding: '6px 10px', fontSize: 10, fontWeight: 500, color: '#a09e96', textAlign: i >= 2 ? 'center' : 'left', borderBottom: '1px solid rgba(0,0,0,0.07)', whiteSpace: 'nowrap' }}>{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {detail.skus.map((s, i) => (
+                            <tr key={s.sku_id} style={{ borderTop: i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)' }}>
+                              <td style={{ padding: '7px 10px', fontFamily: F.code, fontSize: 11, color: '#6b6a64' }}>{s.sku_id}</td>
+                              <td style={{ padding: '7px 10px' }}>{s.sku_name}</td>
+                              <td style={{ padding: '7px 10px', fontFamily: F.code, fontSize: 11, textAlign: 'center', fontWeight: 600 }}>{s.received_quantity}</td>
+                              <td style={{ padding: '7px 10px', fontFamily: F.code, fontSize: 11, textAlign: 'center', color: '#6b6a64' }}>{s.quantity_on_rack ?? '—'}</td>
+                              <td style={{ padding: '7px 10px', textAlign: 'center' }}>
+                                {s.expiration_date
+                                  ? <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', borderRadius: 4, padding: '2px 6px' }}>{fmtExpiry(Number(s.expiration_date))}</span>
+                                  : <span style={{ color: '#a09e96' }}>—</span>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ fontSize: 12, color: '#a09e96', textAlign: 'center', padding: '4px 0' }}>Chưa có SKU trong ASN</div>
+                )}
+              </>
+            )}
+          </div>
+        </td>
+      </tr>
+    )}
+  </Fragment>
+)
+          })}
+        </tbody>
+      </table>
+    </div>
+  )}
+
+  {/* Done / Cancel */}
+  <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(0,0,0,0.07)', display: 'flex', gap: 10, flexShrink: 0 }}>
+    <button
+      onClick={donePallet}
+      disabled={boxes.length === 0}
+      style={{
+        flex: 1, background: boxes.length === 0 ? '#ccc' : '#1d6a3e',
+        color: '#fff', border: 'none', borderRadius: 8,
+        fontFamily: F.display, fontSize: 15, fontWeight: 700,
+        padding: 14, cursor: boxes.length === 0 ? 'not-allowed' : 'pointer',
+        letterSpacing: '0.03em',
+      }}
+    >
+      DONE — Chốt Pallet ({boxes.length} box)
+    </button>
+    <button
+      onClick={() => { setSelectedPallet(null); setBoxes([]); setBoxDetails({}); setExpandedBox(null) }}
+      style={{
+        background: 'transparent', color: '#6b6a64',
+        border: '1px solid rgba(0,0,0,0.12)', borderRadius: 8,
+        padding: '0 16px', cursor: 'pointer', fontSize: 13,
+      }}
+    >
+      Huỷ
+    </button>
+  </div>
+</div>
+
           </div>
         )}
       </div>
