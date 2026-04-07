@@ -281,7 +281,7 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
                     <div style={{ fontFamily: F.code, fontSize: 13, fontWeight: 600 }}>{p.code}</div>
                     <div style={{ fontSize: 11, color: '#a09e96', marginTop: 2 }}>
                       {new Date(p.created_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
-                      {p.note && <span style={{ marginLeft: 6, color: '#b45309' }}>Have a note</span>}
+                      {p.note && <span style={{ marginLeft: 6, color: '#b45309' }}>{p.note}</span>}
                     </div>
                   </div>
                   <StatusBadge status={p.status} />
