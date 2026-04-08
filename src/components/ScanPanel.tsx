@@ -30,6 +30,7 @@ type BoxDetail = {
     quantity_on_rack: number
     expiration_date: string | null
   }[]
+  suggested_blocks: string[]   // ← NEW
 }
 
 const AGING: Record<string, { bg: string; text: string; label: string }> = {
@@ -42,6 +43,47 @@ const AGING: Record<string, { bg: string; text: string; label: string }> = {
 function fmtExpiry(ts: number) {
   if (!ts) return null
   return new Date(ts * 1000).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+type SpeechConfig = {
+  enabled: boolean
+  lang: string
+  rate: number
+  volume: number
+  voiceName?: string
+}
+
+const SPEECH_KEY = 'scan_speech_cfg'
+
+function defaultSpeechConfig(): SpeechConfig {
+  return { enabled: true, lang: 'en-US', rate: 0.9, volume: 1 }
+}
+
+function loadSpeechConfig(): SpeechConfig {
+  try {
+    const raw = localStorage.getItem(SPEECH_KEY)
+    if (raw) return { ...defaultSpeechConfig(), ...JSON.parse(raw) }
+  } catch {}
+  return defaultSpeechConfig()
+}
+
+function saveSpeechConfig(cfg: SpeechConfig) {
+  try { localStorage.setItem(SPEECH_KEY, JSON.stringify(cfg)) } catch {}
+}
+
+function speakBlocks(blocks: string[], cfg: SpeechConfig) {
+  if (!cfg.enabled || !blocks?.length || typeof window === 'undefined' || !window.speechSynthesis) return
+  window.speechSynthesis.cancel()
+  const text = blocks.join(' hoặc ')
+  const utter = new SpeechSynthesisUtterance(text)
+  utter.lang = cfg.lang
+  utter.rate = cfg.rate
+  utter.volume = cfg.volume
+  if (cfg.voiceName) {
+    const voice = window.speechSynthesis.getVoices().find(v => v.name === cfg.voiceName)
+    if (voice) utter.voice = voice
+  }
+  window.speechSynthesis.speak(utter)
 }
 
 const TH: React.CSSProperties = {
@@ -61,7 +103,42 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
   const [palletSearch,   setPalletSearch]   = useState('')
   const [loading,        setLoading]        = useState(false)
   const [toast,          setToast]          = useState<{ msg: string; type: 'ok' | 'err' } | null>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
+  const [speechCfg,      setSpeechCfg]      = useState<SpeechConfig>(defaultSpeechConfig)
+  const [showSpeechCfg,  setShowSpeechCfg]  = useState(false)
+  const [voices,         setVoices]         = useState<SpeechSynthesisVoice[]>([])
+  const inputRef   = useRef<HTMLInputElement>(null)
+  const settingRef = useRef<HTMLDivElement>(null)
+
+  // ── Speech config init ────────────────────────────────────────────────────
+  useEffect(() => {
+    setSpeechCfg(loadSpeechConfig())
+    const loadVoices = () => {
+      const v = window.speechSynthesis?.getVoices() ?? []
+      if (v.length) setVoices(v)
+    }
+    loadVoices()
+    window.speechSynthesis?.addEventListener('voiceschanged', loadVoices)
+    return () => window.speechSynthesis?.removeEventListener('voiceschanged', loadVoices)
+  }, [])
+
+  useEffect(() => {
+    if (!showSpeechCfg) return
+    function handleClick(e: MouseEvent) {
+      if (settingRef.current && !settingRef.current.contains(e.target as Node)) {
+        setShowSpeechCfg(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [showSpeechCfg])
+
+  function updateSpeechCfg(patch: Partial<SpeechConfig>) {
+    setSpeechCfg(prev => {
+      const next = { ...prev, ...patch }
+      saveSpeechConfig(next)
+      return next
+    })
+  }
 
   // ── Fetch ──────────────────────────────────────────────────────────────────
   const fetchActivePallets = useCallback(async () => {
@@ -156,6 +233,7 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
     if (detail) {
       setBoxDetails(prev => ({ ...prev, [code]: detail }))
       setExpandedBox(code)
+      speakBlocks(detail.suggested_blocks, speechCfg)
     }
 
     await fetchBoxes(selectedPallet.id)
@@ -341,237 +419,449 @@ export default function ScanPanel({ profile, onUpdated }: { profile: Profile; on
               </div>
             </div>
 
-            {/* ── Block 2: Box list dạng table ── */}
-{/* ── Block 2: Box list ── */}
-<div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-  {/* Header */}
-  <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(0,0,0,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-    <span style={{ fontFamily: F.display, fontSize: 13, fontWeight: 700 }}>Danh sách box</span>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-      {Object.entries(AGING).map(([k, v]) => (
-        <span key={k} style={{ fontSize: 10, fontWeight: 500, background: v.bg, color: v.text, borderRadius: 4, padding: '2px 6px' }}>
-          {v.label}
-        </span>
-      ))}
-      <span style={{ fontFamily: F.code, fontSize: 12, background: '#e8f0fb', color: '#0d4a8f', border: '1px solid rgba(13,74,143,0.2)', borderRadius: 20, padding: '2px 10px', marginLeft: 4 }}>
-        {boxes.length} box
-      </span>
-    </div>
-  </div>
+            {/* ── Block 2: Box list ── */}
+            <div style={{ background: '#fff', border: '1px solid rgba(0,0,0,0.08)', borderRadius: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+              {/* Header */}
+              <div style={{ padding: '12px 16px', borderBottom: '1px solid rgba(0,0,0,0.07)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, position: 'relative' }}>
+                <span style={{ fontFamily: F.display, fontSize: 13, fontWeight: 700 }}>Danh sách box</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                  {Object.entries(AGING).map(([k, v]) => (
+                    <span key={k} style={{ fontSize: 10, fontWeight: 500, background: v.bg, color: v.text, borderRadius: 4, padding: '2px 6px' }}>
+                      {v.label}
+                    </span>
+                  ))}
+                  <span style={{ fontFamily: F.code, fontSize: 12, background: '#e8f0fb', color: '#0d4a8f', border: '1px solid rgba(13,74,143,0.2)', borderRadius: 20, padding: '2px 10px', marginLeft: 4 }}>
+                    {boxes.length} box
+                  </span>
 
-  {boxes.length === 0 ? (
-    <div style={{ textAlign: 'center', padding: '40px 0', color: '#a09e96', fontSize: 13 }}>
-      Chưa có box. Bắt đầu scan...
-    </div>
-  ) : (
-    /* Scroll container — chiếm hết không gian còn lại của viewport */
-    <div style={{ overflowY: 'auto', maxHeight: 'calc(100vh - 420px)', minHeight: 200 }}>
-      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 700 }}>
-        <colgroup>
-          <col style={{ width: 36 }} />
-          <col style={{ width: 140 }} />
-          <col style={{ width: 72 }} />
-          <col style={{ width: 130 }} />
-          <col style={{ width: 150 }} />
-          <col style={{ width: 130 }} />
-          <col style={{ width: 72 }} />
-          <col style={{ width: 64 }} />
-        </colgroup>
+                  {/* ── Speech setting button ── */}
+                  <div ref={settingRef} style={{ position: 'relative', marginLeft: 4 }}>
+                    <button
+                      onClick={() => setShowSpeechCfg(v => !v)}
+                      title="Cài đặt giọng đọc"
+                      style={{
+                        width: 28, height: 28, borderRadius: 6,
+                        border: `1px solid ${showSpeechCfg ? 'rgba(13,74,143,0.4)' : 'rgba(0,0,0,0.1)'}`,
+                        background: showSpeechCfg ? '#e8f0fb' : 'transparent',
+                        cursor: 'pointer', fontSize: 14,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: speechCfg.enabled ? '#0d4a8f' : '#a09e96',
+                      }}
+                    >
+                      🔊
+                    </button>
 
-        {/* Sticky thead */}
-        <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
-          <tr>
-            {['#', 'Box code', 'Giờ scan', 'ASN', 'Device', 'Aging', 'SKUs', ''].map((h, i) => (
-              <th key={i} style={{ ...TH, position: 'sticky', top: 0, textAlign: i >= 6 ? 'center' : 'left' }}>{h}</th>
-            ))}
-          </tr>
-        </thead>
+                    {showSpeechCfg && (
+                      <div style={{
+                        position: 'absolute', top: 34, right: 0, zIndex: 50,
+                        background: '#fff', border: '1px solid rgba(0,0,0,0.1)',
+                        borderRadius: 12, padding: '14px 16px', width: 280,
+                        boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
+                        display: 'flex', flexDirection: 'column', gap: 12,
+                      }}>
+                        <div style={{ fontSize: 12, fontWeight: 700, color: '#1a1916', marginBottom: 2 }}>Cài đặt giọng đọc</div>
 
-        <tbody>
-          {boxes.map((b, idx) => {
-            const isExpanded = expandedBox === b.box_code
-            const detail = boxDetails[b.box_code]
-            const aging = detail?.aging_level ? AGING[detail.aging_level] : null
+                        {/* Enable toggle */}
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <span style={{ fontSize: 12, color: '#6b6a64' }}>Bật đọc tự động</span>
+                          <button
+                            onClick={() => updateSpeechCfg({ enabled: !speechCfg.enabled })}
+                            style={{
+                              width: 40, height: 22, borderRadius: 11, border: 'none',
+                              background: speechCfg.enabled ? '#1d6a3e' : '#d1d0c8',
+                              cursor: 'pointer', position: 'relative', transition: 'background 0.2s',
+                            }}
+                          >
+                            <span style={{
+                              position: 'absolute', top: 3,
+                              left: speechCfg.enabled ? 21 : 3,
+                              width: 16, height: 16, borderRadius: '50%',
+                              background: '#fff', transition: 'left 0.2s',
+                              display: 'block',
+                            }} />
+                          </button>
+                        </div>
 
-            const tdBase: React.CSSProperties = {
-              padding: '9px 12px',
-              borderBottom: '1px solid rgba(0,0,0,0.05)',
-              background: isExpanded ? '#f5f4f0' : '#fff',
-              cursor: 'pointer',
-              verticalAlign: 'middle',
-              overflow: 'hidden',
-              textOverflow: 'ellipsis',
-              whiteSpace: 'nowrap',
-            }
+                        {/* Language */}
+                        <div>
+                          <div style={{ fontSize: 11, color: '#a09e96', marginBottom: 5 }}>Ngôn ngữ</div>
+                          <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
+                            {[
+                              { value: 'en-US', label: 'EN' },
+                              { value: 'vi-VN', label: 'VI' },
+                            ].map(opt => (
+                              <button
+                                key={opt.value}
+                                onClick={() => updateSpeechCfg({ lang: opt.value })}
+                                style={{
+                                  fontSize: 11, fontWeight: 600,
+                                  padding: '4px 10px', borderRadius: 5, border: '1px solid',
+                                  borderColor: speechCfg.lang === opt.value ? 'rgba(13,74,143,0.4)' : 'rgba(0,0,0,0.1)',
+                                  background: speechCfg.lang === opt.value ? '#e8f0fb' : 'transparent',
+                                  color: speechCfg.lang === opt.value ? '#0d4a8f' : '#6b6a64',
+                                  cursor: 'pointer',
+                                }}
+                              >
+                                {opt.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
 
-            return (
-  <Fragment key={b.id}>
-    <tr onClick={() => toggleExpand(b)}>
-      <td style={{ ...tdBase, fontSize: 11, color: '#a09e96', fontFamily: F.code }}>
-        {boxes.length - idx}
-      </td>
-      <td style={{ ...tdBase, fontFamily: F.code, fontSize: 13, fontWeight: 600 }}>
-        {b.box_code}
-      </td>
-      <td style={{ ...tdBase, fontFamily: F.code, fontSize: 11, color: '#a09e96' }}>
-        {new Date(b.scanned_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-      </td>
-      <td style={{ ...tdBase, fontFamily: F.code, fontSize: 11, color: detail?.asn_id ? '#1a1916' : '#a09e96' }}>
-        {detail?.asn_id ?? '—'}
-      </td>
-      <td style={{ ...tdBase, fontSize: 11, color: '#6b6a64' }}>
-        {detail?.device_status_label ?? '—'}
-      </td>
-      <td style={tdBase}>
-        {aging && detail?.leadtime_hours != null ? (
-          <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 4, padding: '2px 7px', background: aging.bg, color: aging.text, whiteSpace: 'nowrap' }}>
-            {Math.round(detail.leadtime_hours)}h · {aging.label}
-          </span>
-        ) : (
-          detail === undefined
-            ? <span style={{ color: '#c0beb6', fontSize: 11 }}>...</span>
-            : <span style={{ color: '#a09e96', fontSize: 11 }}>—</span>
-        )}
-      </td>
-      <td style={{ ...tdBase, fontSize: 11, color: '#6b6a64', textAlign: 'center' }}>
-        {detail?.skus?.length ? `${detail.skus.length} SKU` : <span style={{ color: '#a09e96' }}>—</span>}
-      </td>
-      <td style={{ ...tdBase, textAlign: 'center' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
-          <button
-            onClick={e => { e.stopPropagation(); toggleExpand(b) }}
-            style={{
-              fontSize: 11, padding: '3px 8px', borderRadius: 5,
-              border: '1px solid rgba(0,0,0,0.12)',
-              background: isExpanded ? '#1a1916' : 'transparent',
-              color: isExpanded ? '#fff' : '#6b6a64',
-              cursor: 'pointer',
-            }}
-          >
-            {isExpanded ? '▲' : '▼'}
-          </button>
-          <button
-            onClick={e => { e.stopPropagation(); removeBox(b) }}
-            style={{
-              width: 22, height: 22, borderRadius: 4,
-              border: '1px solid rgba(0,0,0,0.1)',
-              background: 'transparent', cursor: 'pointer',
-              color: '#a09e96', fontSize: 12,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}
-          >✕</button>
-        </div>
-      </td>
-    </tr>
+                        {/* Voices (nếu có) */}
+                        {voices.filter(v => v.lang.startsWith(speechCfg.lang.slice(0, 2))).length > 1 && (
+                          <div>
+                            <div style={{ fontSize: 11, color: '#a09e96', marginBottom: 5 }}>Giọng đọc</div>
+                            <select
+                              value={speechCfg.voiceName ?? ''}
+                              onChange={e => updateSpeechCfg({ voiceName: e.target.value })}
+                              style={{
+                                width: '100%', fontSize: 12, padding: '5px 8px',
+                                borderRadius: 6, border: '1px solid rgba(0,0,0,0.1)',
+                                background: '#f5f4f0', color: '#1a1916', outline: 'none',
+                              }}
+                            >
+                              <option value="">-- Mặc định --</option>
+                              {voices
+                                .filter(v => v.lang.startsWith(speechCfg.lang.slice(0, 2)))
+                                .map(v => (
+                                  <option key={v.name} value={v.name}>{v.name}</option>
+                                ))
+                              }
+                            </select>
+                          </div>
+                        )}
 
-    {isExpanded && (
-      <tr>
-        <td colSpan={8} style={{ padding: 0, borderBottom: '1px solid rgba(0,0,0,0.07)' }}>
-          <div style={{ padding: '12px 16px', background: '#fafaf8', display: 'flex', flexDirection: 'column', gap: 10 }}>
-            {!detail ? (
-              <div style={{ textAlign: 'center', fontSize: 12, color: '#a09e96', padding: '8px 0' }}>Đang tải...</div>
-            ) : (
-              <>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8 }}>
-                  <div style={{ background: '#f0efe9', borderRadius: 7, padding: '8px 10px' }}>
-                    <div style={{ fontSize: 10, color: '#a09e96', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>ASN / Order</div>
-                    <div style={{ fontFamily: F.code, fontSize: 12, fontWeight: 600 }}>{detail.asn_id ?? '—'}</div>
-                    {detail.asn_status_label && <div style={{ fontSize: 10, color: '#6b6a64', marginTop: 2 }}>{detail.asn_status_label}</div>}
-                  </div>
-                  <div style={{ background: '#f0efe9', borderRadius: 7, padding: '8px 10px' }}>
-                    <div style={{ fontSize: 10, color: '#a09e96', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Device status</div>
-                    <div style={{ fontSize: 12, fontWeight: 600 }}>{detail.device_status_label ?? '—'}</div>
-                    {detail.device_qty != null && <div style={{ fontSize: 10, color: '#6b6a64', marginTop: 2 }}>Qty: {detail.device_qty}</div>}
-                  </div>
-                  <div style={{ background: aging ? aging.bg : '#f0efe9', borderRadius: 7, padding: '8px 10px' }}>
-                    <div style={{ fontSize: 10, color: aging ? aging.text : '#a09e96', opacity: 0.8, marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Aging</div>
-                    <div style={{ fontFamily: F.code, fontSize: 16, fontWeight: 700, color: aging ? aging.text : '#1a1916' }}>
-                      {detail.leadtime_hours != null ? `${Math.round(detail.leadtime_hours)}h` : '—'}
-                    </div>
-                    {detail.arrived_at && (
-                      <div style={{ fontSize: 10, color: aging ? aging.text : '#6b6a64', marginTop: 2 }}>
-                        Arrived {new Date(detail.arrived_at).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                        {/* Rate */}
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                            <span style={{ fontSize: 11, color: '#a09e96' }}>Tốc độ</span>
+                            <span style={{ fontSize: 11, fontFamily: F.code, color: '#1a1916' }}>{speechCfg.rate.toFixed(1)}x</span>
+                          </div>
+                          <input
+                            type="range" min="0.5" max="2" step="0.1"
+                            value={speechCfg.rate}
+                            onChange={e => updateSpeechCfg({ rate: parseFloat(e.target.value) })}
+                            style={{ width: '100%' }}
+                          />
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 10, color: '#c0beb6', marginTop: 2 }}>
+                            <span>Chậm</span><span>Nhanh</span>
+                          </div>
+                        </div>
+
+                        {/* Volume */}
+                        <div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+                            <span style={{ fontSize: 11, color: '#a09e96' }}>Âm lượng</span>
+                            <span style={{ fontSize: 11, fontFamily: F.code, color: '#1a1916' }}>{Math.round(speechCfg.volume * 100)}%</span>
+                          </div>
+                          <input
+                            type="range" min="0" max="1" step="0.1"
+                            value={speechCfg.volume}
+                            onChange={e => updateSpeechCfg({ volume: parseFloat(e.target.value) })}
+                            style={{ width: '100%' }}
+                          />
+                        </div>
+
+                        {/* Test button */}
+                        <button
+                          onClick={() => speakBlocks(['Block A'], speechCfg)}
+                          style={{
+                            fontSize: 12, padding: '7px 0', borderRadius: 7,
+                            border: '1px solid rgba(0,0,0,0.1)',
+                            background: '#f5f4f0', color: '#1a1916',
+                            cursor: 'pointer', fontWeight: 600,
+                          }}
+                        >
+                          Test giọng
+                        </button>
                       </div>
                     )}
                   </div>
                 </div>
+              </div>
 
-                {detail.skus?.length > 0 ? (
-                  <div>
-                    <div style={{ fontSize: 10, color: '#a09e96', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
-                      SKUs ({detail.skus.length})
-                    </div>
-                    <div style={{ border: '1px solid rgba(0,0,0,0.07)', borderRadius: 7, overflow: 'hidden' }}>
-                      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
-                        <thead>
-                          <tr style={{ background: '#f5f4f0' }}>
-                            {['SKU ID', 'Tên hàng', 'Recv', 'Rack', 'HSD'].map((h, i) => (
-                              <th key={h} style={{ padding: '6px 10px', fontSize: 10, fontWeight: 500, color: '#a09e96', textAlign: i >= 2 ? 'center' : 'left', borderBottom: '1px solid rgba(0,0,0,0.07)', whiteSpace: 'nowrap' }}>{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {detail.skus.map((s, i) => (
-                            <tr key={s.sku_id} style={{ borderTop: i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)' }}>
-                              <td style={{ padding: '7px 10px', fontFamily: F.code, fontSize: 11, color: '#6b6a64' }}>{s.sku_id}</td>
-                              <td style={{ padding: '7px 10px' }}>{s.sku_name}</td>
-                              <td style={{ padding: '7px 10px', fontFamily: F.code, fontSize: 11, textAlign: 'center', fontWeight: 600 }}>{s.received_quantity}</td>
-                              <td style={{ padding: '7px 10px', fontFamily: F.code, fontSize: 11, textAlign: 'center', color: '#6b6a64' }}>{s.quantity_on_rack ?? '—'}</td>
-                              <td style={{ padding: '7px 10px', textAlign: 'center' }}>
-                                {s.expiration_date
-                                  ? <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', borderRadius: 4, padding: '2px 6px' }}>{fmtExpiry(Number(s.expiration_date))}</span>
-                                  : <span style={{ color: '#a09e96' }}>—</span>}
+              {boxes.length === 0 ? (
+                <div style={{ textAlign: 'center', padding: '40px 0', color: '#a09e96', fontSize: 13 }}>
+                  Chưa có box. Bắt đầu scan...
+                </div>
+              ) : (
+                <div style={{ overflowY: 'auto', maxHeight: 'calc(100vh - 420px)', minHeight: 200 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'fixed', minWidth: 860 }}>
+                    <colgroup>
+                      <col style={{ width: 36 }} />
+                      <col style={{ width: 130 }} />
+                      <col style={{ width: 68 }} />
+                      <col style={{ width: 120 }} />
+                      <col style={{ width: 130 }} />
+                      <col style={{ width: 120 }} />
+                      {/* ↓ NEW: Suggested Block column */}
+                      <col style={{ width: 180 }} />
+                      <col style={{ width: 60 }} />
+                      <col style={{ width: 64 }} />
+                    </colgroup>
+
+                    {/* Sticky thead */}
+                    <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}>
+                      <tr>
+                        {['#', 'Box code', 'Giờ scan', 'ASN', 'Device', 'Aging', 'Suggested Block', 'SKUs', ''].map((h, i) => (
+                          <th key={i} style={{ ...TH, position: 'sticky', top: 0, textAlign: i >= 7 ? 'center' : 'left' }}>{h}</th>
+                        ))}
+                      </tr>
+                    </thead>
+
+                    <tbody>
+                      {boxes.map((b, idx) => {
+                        const isExpanded = expandedBox === b.box_code
+                        const detail = boxDetails[b.box_code]
+                        const aging = detail?.aging_level ? AGING[detail.aging_level] : null
+
+                        const tdBase: React.CSSProperties = {
+                          padding: '9px 12px',
+                          borderBottom: '1px solid rgba(0,0,0,0.05)',
+                          background: isExpanded ? '#f5f4f0' : '#fff',
+                          cursor: 'pointer',
+                          verticalAlign: 'middle',
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap',
+                        }
+
+                        return (
+                          <Fragment key={b.id}>
+                            <tr onClick={() => toggleExpand(b)}>
+                              <td style={{ ...tdBase, fontSize: 11, color: '#a09e96', fontFamily: F.code }}>
+                                {boxes.length - idx}
+                              </td>
+                              <td style={{ ...tdBase, fontFamily: F.code, fontSize: 13, fontWeight: 600 }}>
+                                {b.box_code}
+                              </td>
+                              <td style={{ ...tdBase, fontFamily: F.code, fontSize: 11, color: '#a09e96' }}>
+                                {new Date(b.scanned_at).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              </td>
+                              <td style={{ ...tdBase, fontFamily: F.code, fontSize: 11, color: detail?.asn_id ? '#1a1916' : '#a09e96' }}>
+                                {detail?.asn_id ?? '—'}
+                              </td>
+                              <td style={{ ...tdBase, fontSize: 11, color: '#6b6a64' }}>
+                                {detail?.device_status_label ?? '—'}
+                              </td>
+                              <td style={tdBase}>
+                                {aging && detail?.leadtime_hours != null ? (
+                                  <span style={{ fontSize: 11, fontWeight: 600, borderRadius: 4, padding: '2px 7px', background: aging.bg, color: aging.text, whiteSpace: 'nowrap' }}>
+                                    {Math.round(detail.leadtime_hours)}h · {aging.label}
+                                  </span>
+                                ) : (
+                                  detail === undefined
+                                    ? <span style={{ color: '#c0beb6', fontSize: 11 }}>...</span>
+                                    : <span style={{ color: '#a09e96', fontSize: 11 }}>—</span>
+                                )}
+                              </td>
+
+                              {/* ── NEW: Suggested Block cell ── */}
+                              <td style={{ ...tdBase, whiteSpace: 'normal' }}>
+                                {detail === undefined ? (
+                                  <span style={{ color: '#c0beb6', fontSize: 11 }}>...</span>
+                                ) : detail?.suggested_blocks?.length ? (
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 3 }}>
+                                    {detail.suggested_blocks.map(blk => (
+                                      <span
+                                        key={blk}
+                                        style={{
+                                          fontSize: 10, fontWeight: 700,
+                                          background: '#e8f0fb', color: '#0d4a8f',
+                                          border: '1px solid rgba(13,74,143,0.2)',
+                                          borderRadius: 4, padding: '2px 6px',
+                                          fontFamily: F.code,
+                                          whiteSpace: 'nowrap',
+                                        }}
+                                      >
+                                        {blk}
+                                      </span>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span style={{ color: '#a09e96', fontSize: 11 }}>—</span>
+                                )}
+                              </td>
+
+                              <td style={{ ...tdBase, fontSize: 11, color: '#6b6a64', textAlign: 'center' }}>
+                                {detail?.skus?.length ? `${detail.skus.length} SKU` : <span style={{ color: '#a09e96' }}>—</span>}
+                              </td>
+                              <td style={{ ...tdBase, textAlign: 'center' }}>
+                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                                  <button
+                                    onClick={e => { e.stopPropagation(); toggleExpand(b) }}
+                                    style={{
+                                      fontSize: 11, padding: '3px 8px', borderRadius: 5,
+                                      border: '1px solid rgba(0,0,0,0.12)',
+                                      background: isExpanded ? '#1a1916' : 'transparent',
+                                      color: isExpanded ? '#fff' : '#6b6a64',
+                                      cursor: 'pointer',
+                                    }}
+                                  >
+                                    {isExpanded ? '▲' : '▼'}
+                                  </button>
+                                  <button
+                                    onClick={e => { e.stopPropagation(); removeBox(b) }}
+                                    style={{
+                                      width: 22, height: 22, borderRadius: 4,
+                                      border: '1px solid rgba(0,0,0,0.1)',
+                                      background: 'transparent', cursor: 'pointer',
+                                      color: '#a09e96', fontSize: 12,
+                                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    }}
+                                  >✕</button>
+                                </div>
                               </td>
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ fontSize: 12, color: '#a09e96', textAlign: 'center', padding: '4px 0' }}>Chưa có SKU trong ASN</div>
-                )}
-              </>
-            )}
-          </div>
-        </td>
-      </tr>
-    )}
-  </Fragment>
-)
-          })}
-        </tbody>
-      </table>
-    </div>
-  )}
 
-  {/* Done / Cancel */}
-  <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(0,0,0,0.07)', display: 'flex', gap: 10, flexShrink: 0 }}>
-    <button
-      onClick={donePallet}
-      disabled={boxes.length === 0}
-      style={{
-        flex: 1, background: boxes.length === 0 ? '#ccc' : '#1d6a3e',
-        color: '#fff', border: 'none', borderRadius: 8,
-        fontFamily: F.display, fontSize: 15, fontWeight: 700,
-        padding: 14, cursor: boxes.length === 0 ? 'not-allowed' : 'pointer',
-        letterSpacing: '0.03em',
-      }}
-    >
-      DONE — Chốt Pallet ({boxes.length} box)
-    </button>
-    <button
-      onClick={() => { setSelectedPallet(null); setBoxes([]); setBoxDetails({}); setExpandedBox(null) }}
-      style={{
-        background: 'transparent', color: '#6b6a64',
-        border: '1px solid rgba(0,0,0,0.12)', borderRadius: 8,
-        padding: '0 16px', cursor: 'pointer', fontSize: 13,
-      }}
-    >
-      Huỷ
-    </button>
-  </div>
-</div>
+                            {isExpanded && (
+                              <tr>
+                                <td colSpan={9} style={{ padding: 0, borderBottom: '1px solid rgba(0,0,0,0.07)' }}>
+                                  <div style={{ padding: '12px 16px', background: '#fafaf8', display: 'flex', flexDirection: 'column', gap: 10 }}>
+                                    {!detail ? (
+                                      <div style={{ textAlign: 'center', fontSize: 12, color: '#a09e96', padding: '8px 0' }}>Đang tải...</div>
+                                    ) : (
+                                      <>
+                                        {/* ── NEW: Suggested Block banner (full-width, nổi bật) ── */}
+                                        {detail.suggested_blocks?.length > 0 && (
+                                          <div style={{
+                                            background: 'linear-gradient(135deg, #e8f0fb 0%, #dbeafe 100%)',
+                                            border: '1px solid rgba(13,74,143,0.2)',
+                                            borderRadius: 8,
+                                            padding: '10px 14px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: 12,
+                                          }}>
+                                            <div style={{ flexShrink: 0 }}>
+                                              <div style={{ fontSize: 10, color: '#0d4a8f', opacity: 0.65, textTransform: 'uppercase', letterSpacing: '0.06em', marginBottom: 3, fontWeight: 600 }}>
+                                                Suggested Block
+                                              </div>
+                                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                                                {detail.suggested_blocks.map(blk => (
+                                                  <span
+                                                    key={blk}
+                                                    style={{
+                                                      fontFamily: F.code,
+                                                      fontSize: 15,
+                                                      fontWeight: 700,
+                                                      color: '#0d4a8f',
+                                                      background: '#fff',
+                                                      border: '1.5px solid rgba(13,74,143,0.3)',
+                                                      borderRadius: 6,
+                                                      padding: '4px 12px',
+                                                      letterSpacing: '0.03em',
+                                                    }}
+                                                  >
+                                                    {blk}
+                                                  </span>
+                                                ))}
+                                              </div>
+                                            </div>
+                                          </div>
+                                        )}
+
+                                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,minmax(0,1fr))', gap: 8 }}>
+                                          <div style={{ background: '#f0efe9', borderRadius: 7, padding: '8px 10px' }}>
+                                            <div style={{ fontSize: 10, color: '#a09e96', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>ASN / Order</div>
+                                            <div style={{ fontFamily: F.code, fontSize: 12, fontWeight: 600 }}>{detail.asn_id ?? '—'}</div>
+                                            {detail.asn_status_label && <div style={{ fontSize: 10, color: '#6b6a64', marginTop: 2 }}>{detail.asn_status_label}</div>}
+                                          </div>
+                                          <div style={{ background: '#f0efe9', borderRadius: 7, padding: '8px 10px' }}>
+                                            <div style={{ fontSize: 10, color: '#a09e96', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Device status</div>
+                                            <div style={{ fontSize: 12, fontWeight: 600 }}>{detail.device_status_label ?? '—'}</div>
+                                            {detail.device_qty != null && <div style={{ fontSize: 10, color: '#6b6a64', marginTop: 2 }}>Qty: {detail.device_qty}</div>}
+                                          </div>
+                                          <div style={{ background: aging ? aging.bg : '#f0efe9', borderRadius: 7, padding: '8px 10px' }}>
+                                            <div style={{ fontSize: 10, color: aging ? aging.text : '#a09e96', opacity: 0.8, marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Aging</div>
+                                            <div style={{ fontFamily: F.code, fontSize: 16, fontWeight: 700, color: aging ? aging.text : '#1a1916' }}>
+                                              {detail.leadtime_hours != null ? `${Math.round(detail.leadtime_hours)}h` : '—'}
+                                            </div>
+                                            {detail.arrived_at && (
+                                              <div style={{ fontSize: 10, color: aging ? aging.text : '#6b6a64', marginTop: 2 }}>
+                                                Arrived {new Date(detail.arrived_at).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                              </div>
+                                            )}
+                                          </div>
+                                        </div>
+
+                                        {detail.skus?.length > 0 ? (
+                                          <div>
+                                            <div style={{ fontSize: 10, color: '#a09e96', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 6 }}>
+                                              SKUs ({detail.skus.length})
+                                            </div>
+                                            <div style={{ border: '1px solid rgba(0,0,0,0.07)', borderRadius: 7, overflow: 'hidden' }}>
+                                              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+                                                <thead>
+                                                  <tr style={{ background: '#f5f4f0' }}>
+                                                    {['SKU ID', 'Tên hàng', 'Recv', 'Rack', 'HSD'].map((h, i) => (
+                                                      <th key={h} style={{ padding: '6px 10px', fontSize: 10, fontWeight: 500, color: '#a09e96', textAlign: i >= 2 ? 'center' : 'left', borderBottom: '1px solid rgba(0,0,0,0.07)', whiteSpace: 'nowrap' }}>{h}</th>
+                                                    ))}
+                                                  </tr>
+                                                </thead>
+                                                <tbody>
+                                                  {detail.skus.map((s, i) => (
+                                                    <tr key={s.sku_id} style={{ borderTop: i === 0 ? 'none' : '1px solid rgba(0,0,0,0.05)' }}>
+                                                      <td style={{ padding: '7px 10px', fontFamily: F.code, fontSize: 11, color: '#6b6a64' }}>{s.sku_id}</td>
+                                                      <td style={{ padding: '7px 10px' }}>{s.sku_name}</td>
+                                                      <td style={{ padding: '7px 10px', fontFamily: F.code, fontSize: 11, textAlign: 'center', fontWeight: 600 }}>{s.received_quantity}</td>
+                                                      <td style={{ padding: '7px 10px', fontFamily: F.code, fontSize: 11, textAlign: 'center', color: '#6b6a64' }}>{s.quantity_on_rack ?? '—'}</td>
+                                                      <td style={{ padding: '7px 10px', textAlign: 'center' }}>
+                                                        {s.expiration_date
+                                                          ? <span style={{ fontSize: 10, color: '#92400e', background: '#fef3c7', borderRadius: 4, padding: '2px 6px' }}>{fmtExpiry(Number(s.expiration_date))}</span>
+                                                          : <span style={{ color: '#a09e96' }}>—</span>}
+                                                      </td>
+                                                    </tr>
+                                                  ))}
+                                                </tbody>
+                                              </table>
+                                            </div>
+                                          </div>
+                                        ) : (
+                                          <div style={{ fontSize: 12, color: '#a09e96', textAlign: 'center', padding: '4px 0' }}>Chưa có SKU trong ASN</div>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+
+              {/* Done / Cancel */}
+              <div style={{ padding: '12px 16px', borderTop: '1px solid rgba(0,0,0,0.07)', display: 'flex', gap: 10, flexShrink: 0 }}>
+                <button
+                  onClick={donePallet}
+                  disabled={boxes.length === 0}
+                  style={{
+                    flex: 1, background: boxes.length === 0 ? '#ccc' : '#1d6a3e',
+                    color: '#fff', border: 'none', borderRadius: 8,
+                    fontFamily: F.display, fontSize: 15, fontWeight: 700,
+                    padding: 14, cursor: boxes.length === 0 ? 'not-allowed' : 'pointer',
+                    letterSpacing: '0.03em',
+                  }}
+                >
+                  DONE — Chốt Pallet ({boxes.length} box)
+                </button>
+                <button
+                  onClick={() => { setSelectedPallet(null); setBoxes([]); setBoxDetails({}); setExpandedBox(null) }}
+                  style={{
+                    background: 'transparent', color: '#6b6a64',
+                    border: '1px solid rgba(0,0,0,0.12)', borderRadius: 8,
+                    padding: '0 16px', cursor: 'pointer', fontSize: 13,
+                  }}
+                >
+                  Huỷ
+                </button>
+              </div>
+            </div>
 
           </div>
         )}
